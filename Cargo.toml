@@ -16,5 +16,13 @@ anyhow = "1.0"
 crossbeam-channel = "0.5" # For async logic/UI communication
 serde = { version = "1.0.228", features = ["derive"] }
 
+# Optimize for size
+[profile.release]
+opt-level = "z"     # Optimize for size (or "s")
+lto = true          # Link Time Optimization
+codegen-units = 1   # Maximize optimization
+panic = "abort"     # Remove unwinding symbols
+strip = true        # Strip symbols from binary
+
 [build-dependencies]
 winres = "0.1.12"

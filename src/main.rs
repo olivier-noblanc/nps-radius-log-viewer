@@ -30,6 +30,8 @@ struct Event {
     ap_ip: Option<String>,
     #[serde(rename = "NAS-Identifier")]
     ap_name: Option<String>,
+    #[serde(rename = "Client-Friendly-Name")]
+    client_friendly_name: Option<String>,
     #[serde(rename = "Calling-Station-Id")]
     mac: Option<String>,
     #[serde(rename = "User-Name")]
@@ -617,7 +619,9 @@ fn process_group(group: &[Event]) -> RadiusRequest {
             if let Some(val) = &event.acct_session_id { req.session_id = val.clone(); }
             if let Some(val) = &event.server { req.server = val.clone(); }
             if let Some(val) = &event.ap_ip { req.ap_ip = val.clone(); }
-            if let Some(val) = &event.ap_name { req.ap_name = val.clone(); }
+            if let Some(val) = &event.ap_ip { req.ap_ip = val.clone(); }
+            if let Some(val) = &event.client_friendly_name { req.ap_name = val.clone(); }
+            else if let Some(val) = &event.ap_name { req.ap_name = val.clone(); }
             if let Some(val) = &event.mac { req.mac = val.clone(); }
             if let Some(val) = &event.class { req.class_id = val.clone(); }
             req.req_type = map_packet_type(p_type);
