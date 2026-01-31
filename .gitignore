@@ -1,9 +1,19 @@
-/target
+# Rust / Cargo
+/target/
 **/*.rs.bk
 *.pdb
+
+# Logs and Data
 *.log
-.idea
-.vscode
+*.txt
 *.evtx
 
-*.txt
+# Editors & IDEs
+.vscode/
+.idea/
+*.swp
+*.iml
+
+# OS
+Thumbs.db
+Desktop.ini
