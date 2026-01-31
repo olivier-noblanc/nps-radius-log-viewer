@@ -1,4 +1,5 @@
-# RADIUS Log Browser (Rust Edition)
+# RADIUS Log Browser (NPS) - Rust Edition
+)
 
 A high-performance, portable viewer for Microsoft NPS/IAS RADIUS logs (XML format).
 Built with **Rust** and **egui** for maximum speed and zero dependencies.
