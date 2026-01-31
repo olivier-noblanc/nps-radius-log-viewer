@@ -3,6 +3,9 @@
 A high-performance, portable viewer for Microsoft NPS/IAS RADIUS logs (XML format).
 Built with **Rust** and **egui** for maximum speed and zero dependencies.
 
+> [!NOTE]
+> This project is a **Rust port** of the original [RADIUS-Log-Browser](https://github.com/burnacid/RADIUS-Log-Browser) by burnacid.
+
 ## 🚀 Features
 
 - **Blazing Fast**: Parses large XML logs (GBs) in seconds using threading.
