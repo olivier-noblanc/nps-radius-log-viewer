@@ -1,5 +1,7 @@
 # RADIUS Log Browser (NPS) - Rust Edition
 
+![Application Screenshot](screenshot.png)
+
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/olivier-noblanc/nps-radius-log-viewer)
 
