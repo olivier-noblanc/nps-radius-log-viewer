@@ -398,7 +398,7 @@ impl eframe::App for RadiusBrowserApp {
                 if ui.add_enabled(self.selected_row.is_some(), egui::Button::new("📋 Copy Row")).clicked() {
                     if let Some(idx) = self.selected_row {
                         if idx < self.filtered_items.len() {
-                             ui.ctx().output_mut(|o| o.copied_text = self.filtered_items[idx].to_tsv());
+                             ui.ctx().copy_text(self.filtered_items[idx].to_tsv());
                         }
                     }
                 }
@@ -621,13 +621,13 @@ impl eframe::App for RadiusBrowserApp {
                                     ui.set_enabled(true); // Reinforce enabled state after separator
                                     // Copy Value
                                     if ui.button("Copy Cell Value").clicked() {
-                                        ui.ctx().output_mut(|o| o.copied_text = text_val.clone());
+                                        ui.ctx().copy_text(text_val.clone());
                                         *status_ref.lock().unwrap() = Some(format!("Copied to clipboard: '{}'", &text_val));
                                         ui.close_menu();
                                     }
                                     // Copy Row
                                     if ui.button("Copy Entire Row").clicked() {
-                                        ui.ctx().output_mut(|o| o.copied_text = row_tsv.clone());
+                                        ui.ctx().copy_text(row_tsv.clone());
                                         *status_ref.lock().unwrap() = Some("Row copied to clipboard".to_string());
                                         ui.close_menu();
                                     }
@@ -672,9 +672,6 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0]),
-            // .with_icon(...) // Handled by build.rs for EXE icon
-        default_theme: eframe::Theme::Dark, // Fallback, but follow_system_theme will override
-        follow_system_theme: true,
         ..Default::default()
     };
     
@@ -703,7 +700,7 @@ fn main() -> eframe::Result<()> {
             style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(20.0));
             cc.egui_ctx.set_style(style);
 
-            Box::new(RadiusBrowserApp::default())
+            Ok(Box::new(RadiusBrowserApp::default()))
         }),
     )
 }
