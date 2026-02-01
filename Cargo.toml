@@ -11,14 +11,14 @@ keywords = ["radius", "nps", "ias", "log-viewer", "network"]
 categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
-eframe = "0.31" # GUI wrapper for egui
-egui = "0.31"   # Immediate Mode GUI library
-egui_extras = { version = "0.31", features = ["all_loaders"] } # Table support
-quick-xml = { version = "0.37", features = ["serialize"] }
+eframe = "0.33" # GUI wrapper for egui
+egui = "0.33"   # Immediate Mode GUI library
+egui_extras = { version = "0.33", features = ["all_loaders"] } # Table support
+quick-xml = { version = "0.38", features = ["serialize"] }
 rayon = "1.10"
 chrono = "0.4.40"
-rfd = "0.15" # Native file dialog
-rust_xlsxwriter = "0.77" # Excel Export
+rfd = "0.17" # Native file dialog
+rust_xlsxwriter = "0.93" # Excel Export
 anyhow = "1.0"
 crossbeam-channel = "0.5" # For async logic/UI communication
 serde = { version = "1.0", features = ["derive"] }
