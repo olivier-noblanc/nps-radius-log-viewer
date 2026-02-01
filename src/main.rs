@@ -88,6 +88,128 @@ impl RadiusRequest {
     }
 }
 
+struct AboutWindow {
+    open: bool,
+}
+
+impl Default for AboutWindow {
+    fn default() -> Self {
+        Self { open: false }
+    }
+}
+
+impl AboutWindow {
+    fn show(&mut self, ctx: &egui::Context) {
+        if !self.open {
+            return;
+        }
+        
+        let mut should_close = false;
+        
+        egui::Window::new("À propos")
+            .open(&mut self.open)
+            .resizable(false)
+            .collapsible(false)
+            .default_width(500.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(15.0);
+                    ui.heading(egui::RichText::new("RADIUS Log Browser").size(26.0).strong());
+                    ui.label(egui::RichText::new("NPS/IAS Edition").size(15.0).color(egui::Color32::GRAY));
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(13.0).color(egui::Color32::DARK_GRAY));
+                    ui.add_space(20.0);
+                });
+                
+                ui.separator();
+                ui.add_space(15.0);
+                
+                // Section Auteur
+                ui.group(|ui| {
+                    ui.set_min_width(450.0);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("👤").size(18.0));
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Développé par").size(11.0).color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new("Olivier Noblanc").size(15.0).strong());
+                        });
+                    });
+                    ui.add_space(8.0);
+                });
+                
+                ui.add_space(12.0);
+                
+                // Section Projet
+                ui.group(|ui| {
+                    ui.set_min_width(450.0);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("🔗").size(18.0));
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Dépôt GitHub").size(11.0).color(egui::Color32::GRAY));
+                            ui.hyperlink_to(
+                                egui::RichText::new("olivier-noblanc/nps-radius-log-viewer").size(13.0),
+                                "https://github.com/olivier-noblanc/nps-radius-log-viewer"
+                            );
+                        });
+                    });
+                    ui.add_space(8.0);
+                });
+                
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(15.0);
+                
+                // Description
+                ui.label(egui::RichText::new("📝 Description").size(14.0).strong());
+                ui.add_space(8.0);
+                ui.label("Visualiseur haute performance pour les logs RADIUS de Microsoft NPS/IAS.");
+                ui.label("Construit avec Rust et egui pour une vitesse maximale et zéro dépendance.");
+                
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(15.0);
+                
+                // Licence
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("⚖️ Licence :").size(13.0).strong());
+                    ui.label(egui::RichText::new("MIT / Apache 2.0").size(13.0));
+                });
+                
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(15.0);
+                
+                // Crédit
+                ui.label(egui::RichText::new("🙏 Remerciements").size(13.0).strong());
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    ui.label("Basé sur le projet original de");
+                    ui.hyperlink_to(
+                        "burnacid",
+                        "https://github.com/burnacid/RADIUS-Log-Browser"
+                    );
+                });
+                
+                ui.add_space(20.0);
+                ui.vertical_centered(|ui| {
+                    if ui.button(egui::RichText::new("Fermer").size(14.0)).clicked() {
+                        should_close = true;
+                    }
+                });
+                ui.add_space(15.0);
+            });
+        
+        if should_close {
+            self.open = false;
+        }
+    }
+}
+
 struct RadiusBrowserApp {
     items: Arc<Vec<RadiusRequest>>, 
     filtered_items: Arc<Vec<RadiusRequest>>,
@@ -100,6 +222,7 @@ struct RadiusBrowserApp {
     col_widths: Vec<f32>,
     layout_version: usize,
     show_errors_only: bool, // New Filter State
+    about_window: AboutWindow, // About Window
 }
 
 impl Default for RadiusBrowserApp {
@@ -113,6 +236,7 @@ impl Default for RadiusBrowserApp {
             col_widths: vec![130.0, 110.0, 110.0, 100.0, 150.0, 130.0, 150.0, 300.0],
             layout_version: 0,
             show_errors_only: false,
+            about_window: AboutWindow::default(),
         }
     }
 }
@@ -277,6 +401,11 @@ impl eframe::App for RadiusBrowserApp {
                              ui.ctx().output_mut(|o| o.copied_text = self.filtered_items[idx].to_tsv());
                         }
                     }
+                }
+                
+                ui.separator();
+                if ui.button("ℹ️ About").clicked() {
+                    self.about_window.open = true;
                 }
             });
             ui.add_space(4.0);
@@ -529,18 +658,15 @@ impl eframe::App for RadiusBrowserApp {
                 self.status = msg;
             };
         });
+        
+        // Afficher la fenêtre About si ouverte
+        self.about_window.show(ctx);
     }
 }
 
-fn set_panic_hook() {
-    std::panic::set_hook(Box::new(|info| {
-        let msg = info.to_string();
-        let _ = std::fs::write("crash.log", format!("CRASH REPORT:\n{}", msg));
-    }));
-}
-
 fn main() -> eframe::Result<()> {
-    set_panic_hook(); // <--- Install Hook
+    // Configuration de human-panic pour des rapports de crash professionnels
+    human_panic::setup_panic!();
     
     // 1. System Theme Support (Dark/Light auto-detect)
     let options = eframe::NativeOptions {

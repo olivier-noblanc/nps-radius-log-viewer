@@ -1,7 +1,14 @@
 [package]
 name = "radius-log-browser-rs"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
+authors = ["Olivier Noblanc"]
+description = "High-performance viewer for Microsoft NPS/IAS RADIUS logs built with Rust and egui"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/olivier-noblanc/nps-radius-log-viewer"
+homepage = "https://github.com/olivier-noblanc/nps-radius-log-viewer"
+keywords = ["radius", "nps", "ias", "log-viewer", "network"]
+categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
 eframe = "0.26.0" # GUI wrapper for egui
@@ -15,14 +22,16 @@ rust_xlsxwriter = "0.63" # Excel Export
 anyhow = "1.0"
 crossbeam-channel = "0.5" # For async logic/UI communication
 serde = { version = "1.0.228", features = ["derive"] }
+human-panic = "2.0" # Professional crash reporting
 
-# Optimize for size
+# Optimize for size while keeping debug info for crash reports
 [profile.release]
-opt-level = "z"     # Optimize for size (or "s")
+opt-level = "z"     # Optimize for size
 lto = true          # Link Time Optimization
 codegen-units = 1   # Maximize optimization
-panic = "abort"     # Remove unwinding symbols
-strip = true        # Strip symbols from binary
+panic = "unwind"    # Keep unwinding for better crash reports (changed from "abort")
+strip = "symbols"   # Strip only symbols, keep debug info for line numbers
+debug = 1           # Keep minimal debug info for crash reports
 
 [build-dependencies]
 winres = "0.1.12"
