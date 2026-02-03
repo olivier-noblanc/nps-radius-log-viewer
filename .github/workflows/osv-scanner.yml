@@ -15,14 +15,4 @@ permissions:
 
 jobs:
   check-security:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run OSV-Scanner
-        uses: google/osv-scanner-action/execute@main
-        with:
-          scan-args: |-
-            -r
-            ./
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.0
