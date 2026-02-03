@@ -22,7 +22,7 @@ anyhow = "1.0"
 crossbeam-channel = "0.5" # For async logic/UI communication
 serde = { version = "1.0", features = ["derive"] }
 human-panic = "2.0" # Professional crash reporting
-wgpu = { version = "27.0", features = ["dx12", "vulkan", "gles"] } # Force enable backends
+wgpu = { version = "27.0", default-features = false, features = ["dx12", "vulkan", "gles", "wgsl"] }
 
 
 [dependencies.eframe]
