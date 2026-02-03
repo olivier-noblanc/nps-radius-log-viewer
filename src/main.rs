@@ -707,17 +707,17 @@ fn main() -> eframe::Result<()> {
             let mut style = (*cc.egui_ctx.style()).clone();
             
             // --- Metrics (Square & Chunky) ---
-            style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
-            style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
-            style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
-            style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
-            style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
-            style.visuals.window_rounding = egui::Rounding::ZERO;
-            style.visuals.menu_rounding = egui::Rounding::ZERO;
+            style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::ZERO;
+            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
+            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
+            style.visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
+            style.visuals.widgets.open.corner_radius = egui::CornerRadius::ZERO;
+            style.visuals.window_corner_radius = egui::CornerRadius::ZERO;
+            style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
             
             // --- Scrollbars (The User wants to SEE them) ---
-            style.spacing.scroll_bar_width = 16.0; // Classic Windows width
-            style.spacing.scroll_handle_min_length = 20.0;
+            style.spacing.scroll.bar_width = 16.0; // Classic Windows width
+            style.spacing.scroll.handle_min_length = 20.0;
             style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(160)); // Scrollbar border
             
             // --- Colors (Classic Gray) ---
