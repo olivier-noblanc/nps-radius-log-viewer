@@ -1,8 +1,6 @@
 [advisories]
 vulnerability = "deny"
 unmaintained = "warn"
-unsound = "warn"
-notice = "warn"
 
 [licenses]
 unlicensed = "deny"
@@ -15,13 +13,9 @@ allow = [
     "OFL-1.1",
 ]
 copyleft = "deny"
-allow-osi-fsf-free = "either"
-confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
-highlight = "all"
 
 [sources]
 unknown-registry = "deny"
