@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Synchronize and Clean Build
+        shell: pwsh
+        run: |
+          # Met à jour le Cargo.lock pour refléter le passage à Glow/OpenGL
+          cargo update
+          
+          # Nettoie les anciens artefacts de compilation (WGPU) pour éviter les conflits
+          cargo clean
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          # Compilation en mode Release
+          cargo build --release --verbose
+
+      - name: Verify Binary Exists
+        shell: pwsh
+        run: |
+          $binary = "target/release/radius-log-browser-rs.exe"
+          if (Test-Path $binary) {
+              Write-Host "SUCCESS: Binary generated at $binary"
+          } else {
+              Write-Error "FATAL: Binary not found after build."
+              exit 1
+          }
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/radius-log-browser-rs.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

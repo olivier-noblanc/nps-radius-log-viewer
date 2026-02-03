@@ -1,0 +1,27 @@
+name: OSV-Scanner
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  schedule:
+    - cron: '30 12 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  check-security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/execute@master
+        with:
+          scan-args: |-
+            -r
+            ./

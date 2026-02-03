@@ -1,0 +1,57 @@
+[package]
+name = "radius-log-browser-rs"
+version = "1.0.0"
+edition = "2021"
+authors = ["Olivier Noblanc"]
+description = "High-performance viewer for Microsoft NPS/IAS RADIUS logs built with Rust and egui"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/olivier-noblanc/nps-radius-log-viewer"
+homepage = "https://github.com/olivier-noblanc/nps-radius-log-viewer"
+keywords = ["radius", "nps", "ias", "log-viewer", "network"]
+categories = ["command-line-utilities", "visualization"]
+
+[dependencies]
+egui = "0.33"   # Immediate Mode GUI library
+egui_extras = { version = "0.33", features = ["all_loaders"] } # Table support
+quick-xml = { version = "0.38", features = ["serialize"] }
+rayon = "1.10"
+chrono = "0.4.40"
+rfd = "0.17" # Native file dialog
+rust_xlsxwriter = "0.93" # Excel Export
+anyhow = "1.0"
+crossbeam-channel = "0.5" # For async logic/UI communication
+serde = { version = "1.0", features = ["derive"] }
+human-panic = "2.0" # Professional crash reporting
+wgpu = { version = "27.0", features = ["dx12", "vulkan", "gles"] } # Force enable backends
+
+
+[dependencies.eframe]
+version = "0.33"
+default-features = false
+features = ["wgpu", "default_fonts", "wayland"]
+
+
+# Optimize for size while keeping debug info for crash reports
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Link Time Optimization
+codegen-units = 1   # Maximize optimization
+panic = "unwind"    # Keep unwinding for better crash reports (changed from "abort")
+strip = "symbols"   # Strip only symbols, keep debug info for line numbers
+debug = 1           # Keep minimal debug info for crash reports
+
+[build-dependencies]
+winres = "0.1.12"
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+pedantic = "warn"
+nursery = "warn"
+complexity = "warn"
+perf = "warn"
+style = "warn"
+suspicious = "warn"
+unwrap_used = "warn"
+semicolon_if_nothing_returned = "warn"
