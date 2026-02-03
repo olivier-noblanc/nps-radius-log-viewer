@@ -716,8 +716,13 @@ fn main() -> eframe::Result<()> {
             style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
             
             // --- Scrollbars (The User wants to SEE them) ---
+            // --- Scrollbars (The User wants to SEE them) ---
             style.spacing.scroll.bar_width = 16.0; // Classic Windows width
             style.spacing.scroll.handle_min_length = 20.0;
+            style.spacing.scroll.floating = false; // Reserve space!
+            
+            // Track (Background)
+            style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_gray(240); // Light gray track
             style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(160)); // Scrollbar border
             
             // --- Colors (Classic Gray) ---
