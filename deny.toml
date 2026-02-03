@@ -3,10 +3,7 @@ all-features = true
 
 [advisories]
 version = 2
-vulnerability = "deny"
-unmaintained = "warn"
-unsound = "warn"
-notice = "warn"
+ignore = []
 
 [licenses]
 version = 2
