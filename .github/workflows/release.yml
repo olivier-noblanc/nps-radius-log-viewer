@@ -20,15 +20,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Synchronize and Clean Build
-        shell: pwsh
-        run: |
-          # Met à jour le Cargo.lock pour refléter le passage à Glow/OpenGL
-          cargo update
-          
-          # Nettoie les anciens artefacts de compilation (WGPU) pour éviter les conflits
-          cargo clean
-
       - name: Build Release
         shell: pwsh
         run: |
