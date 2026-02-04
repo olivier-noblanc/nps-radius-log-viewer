@@ -952,11 +952,8 @@ impl eframe::App for RadiusBrowserApp {
         }
         let top_elapsed = top_start.elapsed();
 
-        let nav_start = Instant::now();
         let scroll_target = self.handle_keyboard_navigation(ctx);
-        let nav_elapsed = nav_start.elapsed();
 
-        let bottom_start = Instant::now();
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
@@ -968,7 +965,6 @@ impl eframe::App for RadiusBrowserApp {
                 });
             });
         });
-        let bottom_elapsed = bottom_start.elapsed();
 
         let central_start = Instant::now();
         let click_occurred = egui::CentralPanel::default().show(ctx, |ui| {
@@ -977,10 +973,8 @@ impl eframe::App for RadiusBrowserApp {
         let central_elapsed = central_start.elapsed();
         let abs_now = chrono::Local::now().format("%H:%M:%S%.3f");
 
-        let windows_start = Instant::now();
         self.about_window.show(ctx);
         self.render_debug_window(ctx);
-        let windows_elapsed = windows_start.elapsed();
 
         let total_elapsed = update_start.elapsed();
         // Log every frame that has a click, OR every slow frame
