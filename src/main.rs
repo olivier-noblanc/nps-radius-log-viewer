@@ -628,18 +628,15 @@ impl RadiusBrowserApp {
             ui.painter().rect_filled(rect, 0.0, bg);
         }
 
-        // Use a Label with truncation to prevent text overflow into other columns
-        // We use the full cell rect for the label but add small padding
-        let label_rect = rect.shrink2(egui::vec2(4.0, 0.0));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(
-                    egui::RichText::new(text)
-                        .color(params.text_color)
-                        .size(13.0)
-                ).truncate());
-            });
-        });
+        // Efficient text rendering without nested Ui/Layout overhead
+        // We use the ui directly provided by row.col() which is already clipped and positioned
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(text)
+                    .color(params.text_color)
+                    .size(13.0)
+            ).truncate()
+        );
     }
 
     #[allow(clippy::too_many_lines)]
@@ -738,46 +735,10 @@ impl RadiusBrowserApp {
                         // Smart Context Menu attached to the row
                         // We capture necessary data to calculate the clicked column dynamically
                         let items_ref = Arc::clone(&self.filtered_items);
-                        let ns = next_search.clone();
                         let status_ref = next_status.clone();
                         
                         row_response.context_menu(move |ui| {
                             let item = &items_ref[row_index];
-                            
-                            
-                            ui.menu_button("Copy Specific Value", |ui| {
-                                 if ui.button(format!("Timestamp: {}", &item.timestamp)).clicked() {
-                                    ui.ctx().copy_text(item.timestamp.clone());
-                                    ui.close();
-                                 }
-                                 if ui.button(format!("IP: {}", &item.ap_ip)).clicked() {
-                                    ui.ctx().copy_text(item.ap_ip.clone());
-                                    ui.close();
-                                 }
-                                 if ui.button(format!("User: {}", &item.user)).clicked() {
-                                    ui.ctx().copy_text(item.user.clone());
-                                    ui.close();
-                                 }
-                                 if ui.button(format!("MAC: {}", &item.mac)).clicked() {
-                                    ui.ctx().copy_text(item.mac.clone());
-                                    ui.close();
-                                 }
-                            });
-                            
-                            ui.separator();
-                            
-                            // Quick Actions
-                            if ui.button(format!("Filter by User '{}'", &item.user)).clicked() {
-                                *ns.lock().expect("Lock failed") = Some(item.user.clone());
-                                ui.close();
-                            }
-                             if ui.button(format!("Filter by IP '{}'", &item.ap_ip)).clicked() {
-                                *ns.lock().expect("Lock failed") = Some(item.ap_ip.clone());
-                                ui.close();
-                            }
-                            
-                            ui.separator();
-
                             if ui.button("Copy Entire Row (TSV)").clicked() {
                                 let row_tsv = item.to_tsv();
                                 ui.ctx().copy_text(row_tsv);
