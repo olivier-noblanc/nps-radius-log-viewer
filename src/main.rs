@@ -277,11 +277,9 @@ struct RadiusBrowserApp {
     debug_logs: Vec<String>,
     #[serde(skip)]
     show_debug: bool,
-    #[serde(skip)]
-    last_frame_time: Instant,
     continuous_repaint: bool,
     #[serde(skip)]
-    burst_repaints: u32,
+    last_frame_time: Instant,
 }
 
 impl Default for RadiusBrowserApp {
@@ -304,7 +302,6 @@ impl Default for RadiusBrowserApp {
             show_debug: false,
             last_frame_time: Instant::now(),
             continuous_repaint: false,
-            burst_repaints: 0,
         }
     }
 }
@@ -706,7 +703,7 @@ impl RadiusBrowserApp {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>, frame_gap: std::time::Duration) -> bool {
+    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>, _frame_gap: std::time::Duration) -> bool {
         let render_start = std::time::Instant::now();
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
@@ -829,16 +826,7 @@ impl RadiusBrowserApp {
                              clicked_row = Some(row_index);
                         }
 
-                        // Standard context menu (handled by egui for secondary click)
-                        row_response.context_menu(|ui| {
-                            if ui.button("📋 Copy Entire Row (TSV)").clicked() {
-                                let tsv_content = items_arc[row_index].to_tsv();
-                                if let Ok(mut guard) = next_copy.lock() {
-                                    *guard = Some(tsv_content);
-                                }
-                                ui.close();
-                            }
-                        });
+                        // row_response.context_menu(|ui| { ... }) deleted to avoid per-row hover overhead.
                     });
                 });
             });
@@ -846,14 +834,7 @@ impl RadiusBrowserApp {
 
         // Apply immediate updates detected during the frame
         if let Some(idx) = clicked_row {
-            let interaction_start = std::time::Instant::now();
             self.selected_row = Some(idx);
-            let elapsed = interaction_start.elapsed();
-            self.add_debug_log(format!(
-                "🎯 Row {} Clicked | Gap: {:?} | State Update: {:?}", 
-                idx, frame_gap, elapsed
-            ));
-            self.burst_repaints = 10; // Keep GPU "hot" for 10 frames after interaction
             ctx.request_repaint();
         }
 
@@ -900,7 +881,6 @@ impl RadiusBrowserApp {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Renderer: {}", self.gpu_info)).strong());
-                        ui.label(format!("| Burst: {}", self.burst_repaints));
                     });
                     ui.separator();
                     ui.horizontal(|ui| {
@@ -937,14 +917,7 @@ impl eframe::App for RadiusBrowserApp {
         let frame_delta = now.duration_since(self.last_frame_time);
         self.last_frame_time = now;
 
-        if self.continuous_repaint || self.burst_repaints > 0 {
-            if self.burst_repaints > 0 {
-                self.burst_repaints -= 1;
-            }
-            ctx.request_repaint();
-        }
-
-        self.perf_info = format!("Gap: {:?} | Burst: {} | ", frame_delta, self.burst_repaints);
+        self.perf_info = format!("Gap: {:?} | ", frame_delta);
         
         let top_start = Instant::now();
         if self.render_top_panel(ctx) {
