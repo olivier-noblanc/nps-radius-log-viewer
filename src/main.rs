@@ -272,14 +272,9 @@ struct RadiusBrowserApp {
     #[serde(skip)]
     gpu_info: String,
     #[serde(skip)]
-    perf_info: String,
-    #[serde(skip)]
     debug_logs: Vec<String>,
     #[serde(skip)]
     show_debug: bool,
-    continuous_repaint: bool,
-    #[serde(skip)]
-    last_frame_time: Instant,
 }
 
 impl Default for RadiusBrowserApp {
@@ -297,11 +292,8 @@ impl Default for RadiusBrowserApp {
             sort_column: Some(SortColumn::Timestamp),
             sort_descending: true, // Default: Newest first
             gpu_info: "Unknown / Detecting...".to_string(),
-            perf_info: String::new(),
             debug_logs: Vec::new(),
             show_debug: false,
-            last_frame_time: Instant::now(),
-            continuous_repaint: false,
         }
     }
 }
@@ -425,7 +417,6 @@ impl RadiusBrowserApp {
         self.selected_row = None;
         
         let elapsed = start.elapsed();
-        self.perf_info = format!("Last Filter: {:?}, Items: {}", elapsed, self.filtered_items.len());
         self.add_debug_log(format!("apply_filter finished: {:?}", elapsed));
     }
 
@@ -703,8 +694,7 @@ impl RadiusBrowserApp {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>, _frame_gap: std::time::Duration) -> bool {
-        let render_start = std::time::Instant::now();
+    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) -> bool {
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
         // Shared state for closures that need cross-frame or cross-thread persistence
@@ -859,16 +849,6 @@ impl RadiusBrowserApp {
             ctx.request_repaint();
         }
         
-        if let Some(msg) = next_status.lock().ok().and_then(|mut g| g.take()) {
-            self.status = msg;
-            ctx.request_repaint();
-        }
-
-        let render_elapsed = render_start.elapsed();
-        self.perf_info += &format!(" | Render: {:?}", render_elapsed);
-        if render_elapsed.as_millis() > 33 { // Warn if frame drops below 30FPS
-            self.add_debug_log(format!("SLOW FRAME: {:?}", render_elapsed));
-        }
         clicked_row.is_some()
     }
 
@@ -894,7 +874,6 @@ impl RadiusBrowserApp {
                             if ui.button("🗑️ Clear Logs").clicked() {
                                 self.debug_logs.clear();
                             }
-                            ui.checkbox(&mut self.continuous_repaint, "🚀 Turbo Mode (60 FPS Force)");
                         });
                     });
                     egui::ScrollArea::vertical()
@@ -912,18 +891,9 @@ impl RadiusBrowserApp {
 
 impl eframe::App for RadiusBrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let update_start = Instant::now();
-        let now = Instant::now();
-        let frame_delta = now.duration_since(self.last_frame_time);
-        self.last_frame_time = now;
-
-        self.perf_info = format!("Gap: {:?} | ", frame_delta);
-        
-        let top_start = Instant::now();
         if self.render_top_panel(ctx) {
             self.apply_filter();
         }
-        let top_elapsed = top_start.elapsed();
 
         let scroll_target = self.handle_keyboard_navigation(ctx);
 
@@ -934,38 +904,24 @@ impl eframe::App for RadiusBrowserApp {
                     if ui.button("🐞 Debug").clicked() {
                         self.show_debug = !self.show_debug;
                     }
-                    ui.label(egui::RichText::new(&self.perf_info).small().color(egui::Color32::GRAY));
                 });
             });
         });
 
-        let central_start = Instant::now();
         let click_occurred = egui::CentralPanel::default().show(ctx, |ui| {
-            self.render_central_table(ctx, ui, scroll_target, frame_delta)
+            self.render_central_table(ctx, ui, scroll_target)
         }).inner;
-        let central_elapsed = central_start.elapsed();
-        let abs_now = chrono::Local::now().format("%H:%M:%S%.3f");
 
         self.about_window.show(ctx);
         self.render_debug_window(ctx);
 
-        let total_elapsed = update_start.elapsed();
-        // Log every frame that has a click, OR every slow frame
-        if total_elapsed.as_millis() > 16 || click_occurred {
-            self.add_debug_log(format!(
-                "⏱️ UPDATE @ {} | Dur: {:?} [Top: {:?}, Central: {:?}] (Click: {})",
-                abs_now, total_elapsed, top_elapsed, central_elapsed, click_occurred
-            ));
+        if click_occurred {
+            self.add_debug_log(format!("Row interaction @ {}", chrono::Local::now().format("%H:%M:%S%.3f")));
         }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        let start = Instant::now();
         eframe::set_value(storage, "radius_browser_state", self);
-        let elapsed = start.elapsed();
-        if elapsed.as_millis() > 10 {
-            self.add_debug_log(format!("💾 Long SAVE cycle: {:?}", elapsed));
-        }
     }
 }
 
