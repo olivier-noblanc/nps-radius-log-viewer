@@ -5,3 +5,6 @@ sur = "sur"
 projet = "projet"
 Informe = "Informe"
 asInvoker = "asInvoker"
+
+[files]
+extend-exclude = ["patches/**/*"]
