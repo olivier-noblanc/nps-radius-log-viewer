@@ -1157,49 +1157,10 @@ fn main() {
     
     let force_software = std::env::args().any(|x| x == "--software");
     let gpu_info_capture = Arc::new(Mutex::new("Detecting...".to_string()));
-    let app_icon = load_icon();
-
-    // 1. Try GLOW (OpenGL) first for high-performance Glide-wrapper support
-    // We only skip this if --software is requested.
-    if !force_software {
-        let options = eframe::NativeOptions {
-            renderer: eframe::Renderer::Glow,
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1200.0, 800.0])
-                .with_icon(app_icon.clone().unwrap_or_default()),
-            ..Default::default()
-        };
-
-        let gpu_info_glow = gpu_info_capture.clone();
-        let result = eframe::run_native(
-            "Radius Log Browser (OpenGL Mode)",
-            options,
-            Box::new(move |cc| {
-                configure_styles(&cc.egui_ctx);
-                let mut app = cc.storage.map_or_else(RadiusBrowserApp::default, |storage| {
-                    eframe::get_value::<RadiusBrowserApp>(storage, "radius_browser_state")
-                        .unwrap_or_default()
-                });
-                
-                let info = "Hardware Accelerated (OpenGL/Glide)".to_string();
-                if let Ok(mut g) = gpu_info_glow.lock() { *g = info.clone(); }
-                app.gpu_info.clone_from(&info);
-                app.about_window.gpu_info = info;
-
-                Ok(Box::new(app))
-            }),
-        );
-
-        if result.is_ok() {
-            return;
-        }
-        eprintln!("OpenGL Mode failed or was not supported. Falling back to WGPU...");
-    }
-
-    // 2. Fallback to WGPU (or forced Software mode)
     let gpu_info_wgpu = gpu_info_capture.clone();
     let gpu_info_clone = gpu_info_capture.clone();
-    
+    let app_icon = load_icon();
+
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
@@ -1242,7 +1203,7 @@ fn main() {
     };
     
     if let Err(e) = eframe::run_native(
-        "Radius Log Browser (WGPU Compatibility Mode)",
+        "Radius Log Browser (WGPU Mode)",
         options,
         Box::new(move |cc| {
             configure_styles(&cc.egui_ctx);
@@ -1262,7 +1223,7 @@ fn main() {
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
             .set_title("Fatal Graphics Error")
-            .set_description(format!("Failed to initialize any graphics engine.\n\nError: {e}"))
+            .set_description(format!("Failed to initialize graphics engine.\n\nError: {e}"))
             .show();
         std::process::exit(1);
     }
