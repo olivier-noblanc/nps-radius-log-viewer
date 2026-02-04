@@ -652,7 +652,7 @@ impl RadiusBrowserApp {
     ) {
         let rect = ui.max_rect();
         if params.is_selected {
-            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 120, 215)); 
+            ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill); 
         } else if let Some(bg) = params.item.bg_color {
             ui.painter().rect_filled(rect, 0.0, bg);
         }
@@ -705,7 +705,6 @@ impl RadiusBrowserApp {
                 
                 self.trigger_excel_export(ui, &next_status);
 
-                let selection_bg_color = ui.visuals().selection.bg_fill;
                 let mut table = TableBuilder::new(ui)
                     .striped(true)
                     .resizable(true)
