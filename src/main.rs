@@ -716,7 +716,6 @@ impl RadiusBrowserApp {
         let next_sort_col = Arc::new(Mutex::new(None)); 
         let next_status = Arc::new(Mutex::new(None)); 
         let next_copy = Arc::new(Mutex::new(None)); 
-        let mut hovered_row_idx = None;
 
         // Local state for immediate detection within this frame
         let mut clicked_row = None;
@@ -834,24 +833,18 @@ impl RadiusBrowserApp {
                              clicked_row = Some(row_index);
                         }
 
-                        if row_response.hovered() {
-                            hovered_row_idx = Some(row_index);
-                        }
+                        // Standard context menu (handled by egui for secondary click)
+                        row_response.context_menu(|ui| {
+                            if ui.button("📋 Copy Entire Row (TSV)").clicked() {
+                                let tsv_content = items_arc[row_index].to_tsv();
+                                if let Ok(mut guard) = next_copy.lock() {
+                                    *guard = Some(tsv_content);
+                                }
+                                ui.close();
+                            }
+                        });
                     });
                 });
-
-                // Global Context Menu for the Table
-                if let Some(h_idx) = hovered_row_idx {
-                    ui.interact(ui.max_rect(), ui.id(), egui::Sense::click()).context_menu(|ui| {
-                        if ui.button("📋 Copy Entire Row (TSV)").clicked() {
-                            let tsv_content = items_arc[h_idx].to_tsv();
-                            if let Ok(mut guard) = next_copy.lock() {
-                                *guard = Some(tsv_content);
-                            }
-                            ui.close();
-                        }
-                    });
-                }
             });
         });
 
