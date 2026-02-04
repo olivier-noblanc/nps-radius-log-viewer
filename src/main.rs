@@ -273,6 +273,10 @@ struct RadiusBrowserApp {
     gpu_info: String,
     #[serde(skip)]
     perf_info: String,
+    #[serde(skip)]
+    debug_logs: Vec<String>,
+    #[serde(skip)]
+    show_debug: bool,
 }
 
 impl Default for RadiusBrowserApp {
@@ -291,17 +295,29 @@ impl Default for RadiusBrowserApp {
             sort_descending: true, // Default: Newest first
             gpu_info: "Unknown / Detecting...".to_string(),
             perf_info: String::new(),
+            debug_logs: Vec::new(),
+            show_debug: false,
         }
     }
 }
 
 impl RadiusBrowserApp {
+    fn add_debug_log(&mut self, msg: String) {
+        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+        let full_msg = format!("[{}] {}", timestamp, msg);
+        eprintln!("{}", full_msg);
+        self.debug_logs.push(full_msg);
+        if self.debug_logs.len() > 100 {
+            self.debug_logs.remove(0);
+        }
+    }
+
     fn apply_filter(&mut self) {
         let start = std::time::Instant::now();
         let query = self.search_text.trim().to_lowercase();
         let all = self.items.clone();
         
-        eprintln!("[DEBUG] apply_filter started (query: '{}')", query);
+        self.add_debug_log(format!("apply_filter started (query: '{}')", query));
         
         // 1. Identify "Failed Sessions" by Acct-Session-Id
         // We collect the Session IDs of all Access-Rejects.
@@ -405,7 +421,7 @@ impl RadiusBrowserApp {
         
         let elapsed = start.elapsed();
         self.perf_info = format!("Last Filter: {:?}, Items: {}", elapsed, self.filtered_items.len());
-        eprintln!("[DEBUG] apply_filter finished: {:?}", elapsed);
+        self.add_debug_log(format!("apply_filter finished: {:?}", elapsed));
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -791,7 +807,7 @@ impl RadiusBrowserApp {
         if let Some(idx) = clicked_row {
             let interaction_start = std::time::Instant::now();
             self.selected_row = Some(idx);
-            eprintln!("[DEBUG] Row {} clicked, state updated in {:?}", idx, interaction_start.elapsed());
+            self.add_debug_log(format!("Row {} clicked, state updated in {:?}", idx, interaction_start.elapsed()));
             ctx.request_repaint();
         }
 
@@ -824,8 +840,31 @@ impl RadiusBrowserApp {
         let render_elapsed = render_start.elapsed();
         self.perf_info += &format!(" | Render: {:?}", render_elapsed);
         if render_elapsed.as_millis() > 33 { // Warn if frame drops below 30FPS
-            eprintln!("[DEBUG] SLOW FRAME: {:?}", render_elapsed);
+            self.add_debug_log(format!("SLOW FRAME: {:?}", render_elapsed));
         }
+    }
+
+    fn render_debug_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_debug;
+        egui::Window::new("🧰 Performance & Debug Logs")
+            .open(&mut open)
+            .default_size([600.0, 400.0])
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.heading("Telemetry");
+                    ui.label(&self.perf_info);
+                    ui.separator();
+                    ui.heading("Logs");
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for log in &self.debug_logs {
+                                ui.label(egui::RichText::new(log).monospace().size(10.0));
+                            }
+                        });
+                });
+            });
+        self.show_debug = open;
     }
 }
 
@@ -843,6 +882,9 @@ impl eframe::App for RadiusBrowserApp {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("🐞 Debug").clicked() {
+                        self.show_debug = !self.show_debug;
+                    }
                     ui.label(egui::RichText::new(&self.perf_info).small().color(egui::Color32::GRAY));
                 });
             });
@@ -851,9 +893,10 @@ impl eframe::App for RadiusBrowserApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_central_table(ctx, ui, scroll_target);
         });
-        
-        // Show About window if open
+
+        // Show window if open
         self.about_window.show(ctx);
+        self.render_debug_window(ctx);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
