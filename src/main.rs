@@ -277,6 +277,8 @@ struct RadiusBrowserApp {
     debug_logs: Vec<String>,
     #[serde(skip)]
     show_debug: bool,
+    #[serde(skip)]
+    last_frame_time: Instant,
 }
 
 impl Default for RadiusBrowserApp {
@@ -297,6 +299,7 @@ impl Default for RadiusBrowserApp {
             perf_info: String::new(),
             debug_logs: Vec::new(),
             show_debug: false,
+            last_frame_time: Instant::now(),
         }
     }
 }
@@ -781,9 +784,19 @@ impl RadiusBrowserApp {
                         });
 
                         // Interaction: Whole Row
-                        let row_response = row.response().interact(egui::Sense::click());
+                        // SWITCHED TO PRESS-TO-SELECT for instant feedback
+                        let row_response = row.response();
+                        if row_response.clicked_by(egui::PointerButton::Primary) || row_response.secondary_clicked() {
+                            // Already handled by clicked below or just for safety
+                        }
+                        
+                        // We use ctx.input to avoid borrowing ui while it's in use by the table
+                        if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) && row_response.hovered() {
+                             clicked_row = Some(row_index);
+                        }
+                        
                         if row_response.clicked() {
-                            clicked_row = Some(row_index);
+                            // Keep this for standard click handling if needed
                         }
                         
                         // Smart Context Menu - Only formats TSV if button is actually clicked
@@ -870,7 +883,15 @@ impl RadiusBrowserApp {
 
 impl eframe::App for RadiusBrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.perf_info = String::new(); // Reset telemetry for this frame
+        let now = Instant::now();
+        let frame_delta = now.duration_since(self.last_frame_time);
+        self.last_frame_time = now;
+
+        if frame_delta.as_millis() > 100 {
+            self.add_debug_log(format!("⚠️ INTER-FRAME DELAY: {:?}", frame_delta));
+        }
+
+        self.perf_info = format!("Frame Gap: {:?}", frame_delta);
         
         if self.render_top_panel(ctx) {
             self.apply_filter();
