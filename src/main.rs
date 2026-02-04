@@ -705,6 +705,7 @@ impl RadiusBrowserApp {
                 
                 self.trigger_excel_export(ui, &next_status);
 
+                let selection_bg_color = ui.visuals().selection.bg_fill;
                 let mut table = TableBuilder::new(ui)
                     .striped(true)
                     .resizable(true)
@@ -758,7 +759,7 @@ impl RadiusBrowserApp {
                         let row_index = row.index();
                         let item = &items_arc[row_index];
                         let is_selected = selected_idx == Some(row_index);
-                        
+
                         let text_color = if is_selected {
                             egui::Color32::WHITE
                         } else if item.bg_color.is_some() {
@@ -770,8 +771,14 @@ impl RadiusBrowserApp {
                         };
 
                         let params = CellParams { is_selected, item, text_color };
+                        let row_rect = row.response().rect;
 
-                        row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
+                        row.col(|ui| {
+                            if is_selected {
+                                ui.painter().rect_filled(row_rect, 0.0, selection_bg_color);
+                            }
+                            Self::render_table_cell(ui, &item.timestamp, &params)
+                        });
                         row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
                         row.col(|ui| Self::render_table_cell(ui, &item.server, &params));
                         row.col(|ui| Self::render_table_cell(ui, &item.ap_ip, &params));
@@ -784,17 +791,17 @@ impl RadiusBrowserApp {
                         });
 
                         // Interaction: Whole Row
-                        // Restored interact(click) to ensure row is interactive
+                        // Using PointerButton::Primary press for absolute fastest response
                         let row_response = row.response().interact(egui::Sense::click());
                         
-                        // We use ctx.input to avoid borrowing ui while it's in use by the table
-                        // but we check if the row is actually hovered/interacted
                         if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) && row_response.hovered() {
                              clicked_row = Some(row_index);
+                             // Force repaint to show the background highlight in the same frame if possible
+                             ctx.request_repaint(); 
                         }
                         
                         if row_response.clicked() {
-                            clicked_row = Some(row_index); // Redundant but safe
+                            clicked_row = Some(row_index);
                         }
                         
                         // Smart Context Menu - Only formats TSV if button is actually clicked
@@ -891,9 +898,6 @@ impl eframe::App for RadiusBrowserApp {
 
         self.perf_info = format!("Gap: {:?} | ", frame_delta);
         
-        // Force continuous repaint during debugging to rule out event loop throttling
-        ctx.request_repaint();
-        
         let top_start = Instant::now();
         if self.render_top_panel(ctx) {
             self.apply_filter();
@@ -930,7 +934,12 @@ impl eframe::App for RadiusBrowserApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let start = Instant::now();
         eframe::set_value(storage, "radius_browser_state", self);
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 10 {
+            self.add_debug_log(format!("💾 Long SAVE cycle: {:?}", elapsed));
+        }
     }
 }
 
