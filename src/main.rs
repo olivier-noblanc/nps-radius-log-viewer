@@ -280,6 +280,8 @@ struct RadiusBrowserApp {
     #[serde(skip)]
     last_frame_time: Instant,
     continuous_repaint: bool,
+    #[serde(skip)]
+    burst_repaints: u32,
 }
 
 impl Default for RadiusBrowserApp {
@@ -302,6 +304,7 @@ impl Default for RadiusBrowserApp {
             show_debug: false,
             last_frame_time: Instant::now(),
             continuous_repaint: false,
+            burst_repaints: 0,
         }
     }
 }
@@ -490,7 +493,7 @@ impl RadiusBrowserApp {
         let start = Instant::now();
         
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            let inner_start = Instant::now();
+            let _inner_start = Instant::now();
             ui.add_space(4.0); 
             ui.horizontal(|ui| {
                 let load_start = Instant::now();
@@ -703,7 +706,7 @@ impl RadiusBrowserApp {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) {
+    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) -> bool {
         let render_start = std::time::Instant::now();
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
@@ -846,6 +849,7 @@ impl RadiusBrowserApp {
             let interaction_start = std::time::Instant::now();
             self.selected_row = Some(idx);
             self.add_debug_log(format!("Row {} clicked, state updated in {:?}", idx, interaction_start.elapsed()));
+            self.burst_repaints = 10; // Keep GPU "hot" for 10 frames after interaction
             ctx.request_repaint();
         }
 
@@ -880,6 +884,7 @@ impl RadiusBrowserApp {
         if render_elapsed.as_millis() > 33 { // Warn if frame drops below 30FPS
             self.add_debug_log(format!("SLOW FRAME: {:?}", render_elapsed));
         }
+        clicked_row.is_some()
     }
 
     fn render_debug_window(&mut self, ctx: &egui::Context) {
@@ -889,8 +894,10 @@ impl RadiusBrowserApp {
             .default_size([600.0, 400.0])
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
-                    ui.heading("Telemetry");
-                    ui.label(&self.perf_info);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Renderer: {}", self.gpu_info)).strong());
+                        ui.label(format!("| Burst: {}", self.burst_repaints));
+                    });
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.heading("Logs");
@@ -926,11 +933,14 @@ impl eframe::App for RadiusBrowserApp {
         let frame_delta = now.duration_since(self.last_frame_time);
         self.last_frame_time = now;
 
-        if self.continuous_repaint {
+        if self.continuous_repaint || self.burst_repaints > 0 {
+            if self.burst_repaints > 0 {
+                self.burst_repaints -= 1;
+            }
             ctx.request_repaint();
         }
 
-        self.perf_info = format!("Gap: {:?} | ", frame_delta);
+        self.perf_info = format!("Gap: {:?} | Burst: {} | ", frame_delta, self.burst_repaints);
         
         let top_start = Instant::now();
         if self.render_top_panel(ctx) {
@@ -957,9 +967,9 @@ impl eframe::App for RadiusBrowserApp {
         let bottom_elapsed = bottom_start.elapsed();
 
         let central_start = Instant::now();
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.render_central_table(ctx, ui, scroll_target);
-        });
+        let click_occurred = egui::CentralPanel::default().show(ctx, |ui| {
+            self.render_central_table(ctx, ui, scroll_target)
+        }).inner;
         let central_elapsed = central_start.elapsed();
 
         let windows_start = Instant::now();
@@ -968,10 +978,11 @@ impl eframe::App for RadiusBrowserApp {
         let windows_elapsed = windows_start.elapsed();
 
         let total_elapsed = update_start.elapsed();
-        if total_elapsed.as_millis() > 16 {
+        // Log every frame that has a click, OR every slow frame
+        if total_elapsed.as_millis() > 16 || click_occurred {
             self.add_debug_log(format!(
-                "⏱️ SLOW UPDATE: {:?} [Top: {:?}, Central: {:?}]",
-                total_elapsed, top_elapsed, central_elapsed
+                "⏱️ UPDATE: {:?} [Top: {:?}, Central: {:?}] (Click: {})",
+                total_elapsed, top_elapsed, central_elapsed, click_occurred
             ));
         }
     }
