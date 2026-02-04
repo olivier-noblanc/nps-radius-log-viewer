@@ -11,7 +11,7 @@ use std::fs;
 use std::time::Instant;
 use std::collections::HashSet;
 use chrono::NaiveDateTime;
-use rust_xlsxwriter::*; // Excel Support
+use rust_xlsxwriter::{Workbook, Format}; // Excel Support
 
 // --- XML Structures ---
 #[derive(Debug, Deserialize, Clone)]
@@ -40,6 +40,11 @@ struct Event {
     sam_account: Option<String>,
     #[serde(rename = "Reason-Code")]
     reason_code: Option<String>,
+}
+#[derive(Deserialize)]
+struct Root {
+    #[serde(rename = "Event", default)]
+    events: Vec<Event>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -205,6 +210,16 @@ impl AboutWindow {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CellParams<'a> {
+    row_index: usize,
+    is_selected: bool,
+    item: &'a RadiusRequest,
+    next_search: &'a Arc<Mutex<Option<String>>>,
+    next_status: &'a Arc<Mutex<Option<String>>>,
+    text_color: egui::Color32,
+}
+
 struct RadiusBrowserApp {
     items: Arc<Vec<RadiusRequest>>, 
     filtered_items: Arc<Vec<RadiusRequest>>,
@@ -293,7 +308,7 @@ impl RadiusBrowserApp {
         // Measure Headers first
         let headers = ["Timestamp", "Type", "Server", "AP IP", "AP Name", "MAC", "User", "Result/Reason"];
         for (i, h) in headers.iter().enumerate() {
-            let w = h.len() as f32 * approx_char_width;
+            let w = f32::from(u16::try_from(h.len()).unwrap_or(u16::MAX)) * approx_char_width;
             if w > max_widths[i] { max_widths[i] = w; }
         }
 
@@ -301,9 +316,10 @@ impl RadiusBrowserApp {
         let sample_limit = 5000;
         for item in items.iter().take(sample_limit) {
              let mut measure = |idx: usize, text: &str| {
-                 if text.is_empty() { return; }
-                 let w = text.len() as f32 * approx_char_width;
-                 if w > max_widths[idx] { max_widths[idx] = w; }
+                 if !text.is_empty() {
+                     let w = f32::from(u16::try_from(text.len()).unwrap_or(u16::MAX)) * approx_char_width;
+                     if w > max_widths[idx] { max_widths[idx] = w; }
+                 }
              };
 
              measure(0, &item.timestamp);
@@ -313,20 +329,16 @@ impl RadiusBrowserApp {
              measure(4, &item.ap_name);
              measure(5, &item.mac);
              measure(6, &item.user);
-             let reason = if !item.reason.is_empty() { &item.reason } else { &item.resp_type };
+             let reason = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
              measure(7, reason);
         }
 
         // Add padding + Clamping
         max_widths.iter().map(|w| (w + 24.0).clamp(60.0, 800.0)).collect()
     }
-}
 
-impl eframe::App for RadiusBrowserApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn render_top_panel(&mut self, ctx: &egui::Context) -> bool {
         let mut filter_changed = false;
-
-        // --- Top Panel: File & Search ---
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.add_space(4.0); 
             ui.horizontal(|ui| {
@@ -338,18 +350,18 @@ impl eframe::App for RadiusBrowserApp {
                         match parse_full_logic(&path_str) {
                             Ok(items) => {
                                  let count = items.len();
-                                 let new_widths = Self::calculate_widths(&items); // No ctx needed
+                                 let new_widths = Self::calculate_widths(&items); 
                                  self.items = Arc::new(items);
-                                 self.col_widths = new_widths; // Apply widths
-                                 self.layout_version += 1; // RESET TABLE STATE
+                                 self.col_widths = new_widths; 
+                                 self.layout_version += 1; 
                                  self.search_text.clear();
-                                 self.show_errors_only = false; // Reset filters on load
+                                 self.show_errors_only = false; 
                                  self.filtered_items = self.items.clone();
                                  self.status = format!("Loaded {} requests in {:?}", count, start.elapsed());
                                  self.selected_row = None;
                             }
                             Err(e) => {
-                                self.status = format!("Error: {}", e);
+                                self.status = format!("Error: {e}");
                             }
                         }
                     }
@@ -357,7 +369,6 @@ impl eframe::App for RadiusBrowserApp {
 
                 ui.separator();
                 
-                // Toggle Button for Errors
                 let btn = ui.button(if self.show_errors_only { "⚠️ Show All" } else { "⚠️ Failed Sessions" });
                 if btn.clicked() {
                     self.show_errors_only = !self.show_errors_only;
@@ -396,248 +407,270 @@ impl eframe::App for RadiusBrowserApp {
             ui.label(&self.status);
             ui.add_space(4.0);
         });
+        filter_changed
+    }
 
-        if filter_changed {
-            self.apply_filter();
+    fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) -> Option<usize> {
+        if ctx.wants_keyboard_input() {
+            return None;
         }
 
-        // --- Keyboard Navigation ---
-        // Handle keys only if no text edit is focused (simple check: if we're typing search, don't nav)
-        // Better: ctx.input(...)
-        let mut scroll_target = None;
-        if !ctx.wants_keyboard_input() {
-            let total = self.filtered_items.len();
-            if total > 0 {
-                let current = self.selected_row.unwrap_or(0);
-                let mut next = current;
-                let mut changed = false;
+        let total = self.filtered_items.len();
+        if total == 0 {
+            return None;
+        }
 
-                if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && current < total - 1 {
-                    next = current + 1;
-                    changed = true;
-                }
-                if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && current > 0 {
-                    next = current - 1;
-                    changed = true;
-                }
-                if ctx.input(|i| i.key_pressed(egui::Key::PageDown)) {
-                    next = (current + 20).min(total - 1);
-                    changed = true;
-                }
-                if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
-                    next = current.saturating_sub(20);
-                    changed = true;
-                }
-                 if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
-                    next = 0;
-                    changed = true;
-                }
-                if ctx.input(|i| i.key_pressed(egui::Key::End)) && total > 0 {
-                    next = total - 1;
-                    changed = true;
-                }
+        let current = self.selected_row.unwrap_or(0);
+        let mut next = current;
+        
+        let changed = if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && current < total - 1 {
+            next = current + 1;
+            true
+        } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && current > 0 {
+            next = current - 1;
+            true
+        } else if ctx.input(|i| i.key_pressed(egui::Key::PageDown)) {
+            next = (current + 20).min(total - 1);
+            true
+        } else if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
+            next = current.saturating_sub(20);
+            true
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
+            next = 0;
+            true
+        } else if ctx.input(|i| i.key_pressed(egui::Key::End)) && total > 0 {
+            next = total - 1;
+            true
+        } else {
+            false
+        };
 
-                if changed {
-                    // Double Safety Clamp
-                    next = next.min(total.saturating_sub(1));
-                    self.selected_row = Some(next);
-                    scroll_target = Some(next);
-                }
+        if changed {
+            next = next.min(total.saturating_sub(1));
+            self.selected_row = Some(next);
+            Some(next)
+        } else {
+            None
+        }
+    }
+
+    fn trigger_excel_export(&self, ui: &mut egui::Ui, next_status: &Arc<Mutex<Option<String>>>) {
+        if ui.button("📊 Export to Excel").clicked() {
+            if let Some(path) = rfd::FileDialog::new().add_filter("Excel", &["xlsx"]).save_file() {
+                 let items = self.filtered_items.clone();
+                 let path_clone = path;
+                 let status_ref = next_status.clone();
+                 
+                 std::thread::spawn(move || {
+                     let mut workbook = Workbook::new();
+                     let worksheet = workbook.add_worksheet();
+                     let bold = Format::new().set_bold();
+                     let headers = ["Timestamp", "Type", "Server", "AP IP", "AP Name", "MAC", "User", "Result/Reason"];
+                     for (col, header) in headers.iter().enumerate() {
+                         let _ = worksheet.write_with_format(0, u16::try_from(col).unwrap_or(u16::MAX), *header, &bold);
+                     }
+                     for (row_idx, item) in items.iter().enumerate() {
+                         let r = u32::try_from(row_idx + 1).unwrap_or(u32::MAX);
+                         let _ = worksheet.write(r, 0, &item.timestamp);
+                         let _ = worksheet.write(r, 1, &item.req_type);
+                         let _ = worksheet.write(r, 2, &item.server);
+                         let _ = worksheet.write(r, 3, &item.ap_ip);
+                         let _ = worksheet.write(r, 4, &item.ap_name);
+                         let _ = worksheet.write(r, 5, &item.mac);
+                         let _ = worksheet.write(r, 6, &item.user);
+                         
+                         let res_text = if item.reason.is_empty() { 
+                             item.resp_type.clone() 
+                         } else { 
+                             format!("{} ({})", item.resp_type, item.reason) 
+                         };
+                         let _ = worksheet.write(r, 7, &res_text);
+                     }
+                     let _ = worksheet.autofit();
+                     if let Err(e) = workbook.save(&path_clone) {
+                         *status_ref.lock().expect("Lock failed") = Some(format!("Export failed: {e}"));
+                     } else {
+                         *status_ref.lock().expect("Lock failed") = Some("Export successful!".to_string());
+                     }
+                 });
             }
         }
+    }
 
-        // --- Central Panel: Virtual Table ---
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
+    
+    fn render_table_cell(
+        ui: &egui::Ui,
+        text: &str,
+        col_name: &str,
+        params: CellParams,
+    ) -> bool {
+        let mut clicked = false;
+        let rect = ui.max_rect();
+        if params.is_selected {
+            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 120, 215)); 
+        } else if let Some(bg) = params.item.bg_color {
+            ui.painter().rect_filled(rect, 0.0, bg);
+        }
+        let response = ui.interact(rect, ui.id().with(params.row_index).with(col_name), egui::Sense::click());
+        if response.clicked() {
+            clicked = true;
+        }
+        ui.painter().text(
+            rect.min + egui::vec2(4.0, (rect.height() - 13.0) / 2.0),
+            egui::Align2::LEFT_TOP,
+            text,
+            egui::FontId::proportional(13.0),
+            params.text_color,
+        );
+        let text_val = text.to_string();
+        let row_tsv = params.item.to_tsv();
+        let ns = params.next_search.clone();
+        let status_ref = params.next_status.clone();
+        response.context_menu(move |ui| {
+            ui.add_enabled_ui(true, |ui| {
+                if ui.button(format!("Filter by '{}'", &text_val)).clicked() {
+                    *ns.lock().expect("Lock failed") = Some(text_val.clone());
+                    ui.close();
+                }
+            });
+            ui.separator();
+            ui.add_enabled_ui(true, |ui| {
+                if ui.button("Copy Cell Value").clicked() {
+                    ui.ctx().copy_text(text_val.clone());
+                    *status_ref.lock().expect("Lock failed") = Some(format!("Copied to clipboard: '{}'", &text_val));
+                    ui.close();
+                }
+                if ui.button("Copy Entire Row").clicked() {
+                    ui.ctx().copy_text(row_tsv.clone());
+                    *status_ref.lock().expect("Lock failed") = Some("Row copied to clipboard".to_string());
+                    ui.close();
+                }
+            });
+        });
+        clicked
+    }
 
-            let next_search: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-            let next_status: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-            let ws = &self.col_widths;
+    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) {
+        let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
-            ui.push_id(self.layout_version, |ui| {
-                egui::ScrollArea::horizontal().show(ui, |ui| {
-                    // Manual Horizontal Scroll Support
-                    if ctx.input(|i| i.key_down(egui::Key::ArrowRight)) {
-                        ui.scroll_with_delta(egui::vec2(-10.0, 0.0)); // Adjusted speed
-                    }
-                    if ctx.input(|i| i.key_down(egui::Key::ArrowLeft)) {
-                        ui.scroll_with_delta(egui::vec2(10.0, 0.0));
-                    }
-                    
-                    // Export Button
-                    if ui.button("📊 Export to Excel").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("Excel", &["xlsx"]).save_file() {
-                             // Clone data to move into thread or write immediately (blocking is okay for now)
-                             let items = self.filtered_items.clone();
-                             let path_clone = path.clone();
-                             let status_ref = next_status.clone();
-                             
-                             std::thread::spawn(move || {
-                                 let mut workbook = Workbook::new();
-                                 let worksheet = workbook.add_worksheet();
-                                 
-                                 // Header Format
-                                 let bold = Format::new().set_bold();
-                                 
-                                 // Write Headers
-                                 let headers = ["Timestamp", "Type", "Server", "AP IP", "AP Name", "MAC", "User", "Result/Reason"];
-                                 for (col, header) in headers.iter().enumerate() {
-                                     let _ = worksheet.write_with_format(0, col as u16, *header, &bold);
-                                 }
-                                 
-                                 // Write Data
-                                 for (row_idx, item) in items.iter().enumerate() {
-                                     let r = (row_idx + 1) as u32;
-                                     let _ = worksheet.write(r, 0, &item.timestamp);
-                                     let _ = worksheet.write(r, 1, &item.req_type);
-                                     let _ = worksheet.write(r, 2, &item.server);
-                                     let _ = worksheet.write(r, 3, &item.ap_ip);
-                                     let _ = worksheet.write(r, 4, &item.ap_name);
-                                     let _ = worksheet.write(r, 5, &item.mac);
-                                     let _ = worksheet.write(r, 6, &item.user);
-                                     
-                                     let res_text = if !item.reason.is_empty() { 
-                                         format!("{} ({})", item.resp_type, item.reason) 
-                                     } else { 
-                                         item.resp_type.clone() 
-                                     };
-                                     let _ = worksheet.write(r, 7, &res_text);
-                                 }
-                                 
-                                 // Auto-width
-                                 let _ = worksheet.autofit();
-                                 
-                                 if let Err(e) = workbook.save(&path_clone) {
-                                     *status_ref.lock().unwrap() = Some(format!("Export failed: {}", e));
-                                 } else {
-                                     *status_ref.lock().unwrap() = Some("Export successful!".to_string());
-                                 }
-                             });
-                        }
-                    }
+        let next_search = Arc::new(Mutex::new(None));
+        let next_status = Arc::new(Mutex::new(None));
+        let ws = self.col_widths.clone();
 
-                    let mut table = TableBuilder::new(ui)
-                        .striped(true)
-                        .resizable(true)
-                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                        .column(Column::initial(ws[0]).resizable(true)) // Timestamp
-                        .column(Column::initial(ws[1]).resizable(true)) // Type
-                        .column(Column::initial(ws[2]).resizable(true)) // Server
-                        .column(Column::initial(ws[3]).resizable(true)) // AP IP
-                        .column(Column::initial(ws[4]).resizable(true)) // AP Name
-                        .column(Column::initial(ws[5]).resizable(true)) // MAC
-                        .column(Column::initial(ws[6]).resizable(true)) // User
-                        .column(Column::initial(ws[7]).resizable(true)); // Result (FIXED)
+        ui.push_id(self.layout_version, |ui| {
+            egui::ScrollArea::horizontal()
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                if ctx.input(|i| i.key_down(egui::Key::ArrowRight)) {
+                    ui.scroll_with_delta(egui::vec2(-50.0, 0.0)); 
+                }
+                if ctx.input(|i| i.key_down(egui::Key::ArrowLeft)) {
+                    ui.scroll_with_delta(egui::vec2(50.0, 0.0));
+                }
+                
+                self.trigger_excel_export(ui, &next_status);
+
+                let mut table = TableBuilder::new(ui)
+                    .striped(true)
+                    .resizable(true)
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::initial(ws[0]).resizable(true)) 
+                    .column(Column::initial(ws[1]).resizable(true)) 
+                    .column(Column::initial(ws[2]).resizable(true)) 
+                    .column(Column::initial(ws[3]).resizable(true)) 
+                    .column(Column::initial(ws[4]).resizable(true)) 
+                    .column(Column::initial(ws[5]).resizable(true)) 
+                    .column(Column::initial(ws[6]).resizable(true)) 
+                    .column(Column::initial(ws[7]).resizable(true)); 
 
                 if let Some(target) = scroll_target {
                     table = table.scroll_to_row(target, Some(egui::Align::Center));
                 }
 
                 table.header(22.0, |mut header| {
-                        header.col(|ui| { ui.label(egui::RichText::new("Timestamp").strong()); });
-                        header.col(|ui| { ui.label(egui::RichText::new("Type").strong()); });
-                        header.col(|ui| { ui.label(egui::RichText::new("Server").strong()); });
-                        header.col(|ui| { ui.label(egui::RichText::new("AP IP").strong()); });
-                        header.col(|ui| { ui.label(egui::RichText::new("AP Name").strong()); });
-                        header.col(|ui| { ui.label(egui::RichText::new("MAC").strong()); });
-                        header.col(|ui| { ui.label(egui::RichText::new("User").strong()); });
-                        header.col(|ui| { ui.label(egui::RichText::new("Result/Reason").strong()); });
-                    })
-                    .body(|body| {
-                        body.rows(text_height, self.filtered_items.len(), |mut row| {
-                            let row_index = row.index();
-                            let item = &self.filtered_items[row_index];
-                            let is_selected = self.selected_row == Some(row_index);
-                            
-                            let mut text_color = egui::Color32::BLACK;
-                            if ctx.style().visuals.dark_mode { text_color = egui::Color32::LIGHT_GRAY; }
-                            if is_selected { text_color = egui::Color32::WHITE; }
+                    header.col(|ui| { ui.label(egui::RichText::new("Timestamp").strong()); });
+                    header.col(|ui| { ui.label(egui::RichText::new("Type").strong()); });
+                    header.col(|ui| { ui.label(egui::RichText::new("Server").strong()); });
+                    header.col(|ui| { ui.label(egui::RichText::new("AP IP").strong()); });
+                    header.col(|ui| { ui.label(egui::RichText::new("AP Name").strong()); });
+                    header.col(|ui| { ui.label(egui::RichText::new("MAC").strong()); });
+                    header.col(|ui| { ui.label(egui::RichText::new("User").strong()); });
+                    header.col(|ui| { ui.label(egui::RichText::new("Result/Reason").strong()); });
+                })
+                .body(|body| {
+                    let next_sel = Arc::new(Mutex::new(None));
+                    body.rows(text_height, self.filtered_items.len(), |mut row| {
+                        let row_index = row.index();
+                        let item = &self.filtered_items[row_index];
+                        let is_selected = self.selected_row == Some(row_index);
+                        let text_color = if is_selected {
+                            egui::Color32::WHITE
+                        } else if ctx.style().visuals.dark_mode {
+                            egui::Color32::LIGHT_GRAY
+                        } else {
+                            egui::Color32::BLACK
+                        };
+                        let mut params = CellParams {
+                            row_index,
+                            is_selected,
+                            item,
+                            next_search: &next_search,
+                            next_status: &next_status,
+                            text_color,
+                        };
+                        
+                        if item.bg_color.is_some() && !is_selected {
+                            params.text_color = egui::Color32::BLACK;
+                        }
 
+                        let nsel = &next_sel;
 
-
-                            // Draw Cell Logic
-                            let mut cell = |ui: &mut egui::Ui, text: &str, col_name: &str| {
-                                let rect = ui.max_rect();
-                                
-                                // Background
-                                if is_selected {
-                                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 120, 215)); 
-                                } else if let Some(bg) = item.bg_color {
-                                    ui.painter().rect_filled(rect, 0.0, bg);
-                                    if !is_selected { text_color = egui::Color32::BLACK; }
-                                }
-
-                                // Interaction with distinct ID
-                                let response = ui.interact(rect, ui.id().with(row_index).with(col_name), egui::Sense::click());
-                                if response.clicked() {
-                                    self.selected_row = Some(row_index);
-                                }
-                                
-                                // Text
-                                ui.painter().text(
-                                    rect.min + egui::vec2(4.0, (rect.height() - 13.0) / 2.0),
-                                    egui::Align2::LEFT_TOP,
-                                    text,
-                                    egui::FontId::proportional(13.0),
-                                    text_color,
-                                );
-                                
-                                // Context Menu
-                                let text_val = text.to_string(); // Capture owned
-                                let row_tsv = item.to_tsv();     // Capture owned
-                                let ns = next_search.clone();
-                                let status_ref = next_status.clone();
-                                
-                                response.context_menu(move |ui| {
-                                    // Filter
-                                    ui.add_enabled_ui(true, |ui| {
-                                        if ui.button(format!("Filter by '{}'", &text_val)).clicked() {
-                                            *ns.lock().unwrap() = Some(text_val.clone());
-                                            ui.close();
-                                        }
-                                    });
-                                    ui.separator();
-                                    
-                                    ui.add_enabled_ui(true, |ui| {
-                                        // Copy Value
-                                        if ui.button("Copy Cell Value").clicked() {
-                                            ui.ctx().copy_text(text_val.clone());
-                                            *status_ref.lock().unwrap() = Some(format!("Copied to clipboard: '{}'", &text_val));
-                                            ui.close();
-                                        }
-                                        // Copy Row
-                                        if ui.button("Copy Entire Row").clicked() {
-                                            ui.ctx().copy_text(row_tsv.clone());
-                                            *status_ref.lock().unwrap() = Some("Row copied to clipboard".to_string());
-                                            ui.close();
-                                        }
-                                    });
-                                });
-                            };
-
-                            row.col(|ui| cell(ui, &item.timestamp, "ts"));
-                            row.col(|ui| cell(ui, &item.req_type, "type"));
-                            row.col(|ui| cell(ui, &item.server, "srv"));
-                            row.col(|ui| cell(ui, &item.ap_ip, "ip"));
-                            row.col(|ui| cell(ui, &item.ap_name, "ap"));
-                            row.col(|ui| cell(ui, &item.mac, "mac"));
-                            row.col(|ui| cell(ui, &item.user, "user"));
-                            row.col(|ui| { 
-                                let text = if !item.reason.is_empty() { &item.reason } else { &item.resp_type };
-                                cell(ui, text, "res");
-                            });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.timestamp, "ts", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.req_type, "type", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.server, "srv", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_ip, "ip", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_name, "ap", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.mac, "mac", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.user, "user", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| { 
+                            let text = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
+                            if Self::render_table_cell(ui, text, "res", params) {
+                                *nsel.lock().expect("Lock failed") = Some(row_index);
+                            }
                         });
                     });
-                }); // Close ScrollArea
-            }); // Close PushId
-                
-            if let Some(s) = next_search.lock().unwrap().take() {
-                self.search_text = s;
-                self.apply_filter();
-            };
-            if let Some(msg) = next_status.lock().unwrap().take() {
-                self.status = msg;
-            };
+                    let sel = next_sel.lock().expect("Lock failed").take();
+                    if let Some(idx) = sel {
+                        self.selected_row = Some(idx);
+                    }
+                });
+            });
+        });
+
+        let ns_update = next_search.lock().expect("Lock failed").take();
+        let status_update = next_status.lock().expect("Lock failed").take();
+        if let Some(s) = ns_update {
+            self.search_text = s;
+            self.apply_filter();
+        }
+        if let Some(msg) = status_update {
+            self.status = msg;
+        }
+    }
+}
+
+impl eframe::App for RadiusBrowserApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.render_top_panel(ctx) {
+            self.apply_filter();
+        }
+
+        let scroll_target = self.handle_keyboard_navigation(ctx);
+
+        // --- Central Panel: Virtual Table ---
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.render_central_table(ctx, ui, scroll_target);
         });
         
         // Afficher la fenêtre About si ouverte
@@ -645,13 +678,12 @@ impl eframe::App for RadiusBrowserApp {
     }
 }
 
-fn main() -> eframe::Result<()> {
+fn main() {
     // Configuration de human-panic pour des rapports de crash professionnels
     human_panic::setup_panic!();
     
     // 1. System Theme Support (Dark/Light auto-detect)
-    let args: Vec<String> = std::env::args().collect();
-    let force_software = args.contains(&"--software".to_string());
+    let force_software = std::env::args().any(|x| x == "--software");
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -685,11 +717,7 @@ fn main() -> eframe::Result<()> {
                            .or_else(|| adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu))
                            .or_else(|| adapters.first());
                            
-                       if let Some(a) = adapter {
-                           Ok(a.clone())
-                       } else {
-                           Err("No adapter found".to_owned())
-                       }
+                       adapter.cloned().ok_or_else(|| "No adapter found".to_owned())
                     })),
                     ..Default::default()
                 }
@@ -716,14 +744,18 @@ fn main() -> eframe::Result<()> {
             style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
             
             // --- Scrollbars (The User wants to SEE them) ---
-            // --- Scrollbars (The User wants to SEE them) ---
             style.spacing.scroll.bar_width = 16.0; // Classic Windows width
             style.spacing.scroll.handle_min_length = 20.0;
             style.spacing.scroll.floating = false; // Reserve space!
             
             // Track (Background)
-            style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_gray(240); // Light gray track
-            style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(160)); // Scrollbar border
+            style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_gray(245); // Very light gray track
+            style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(180)); // Scrollbar border
+            
+            // Handle (The thumb you drag) - Make it much more visible
+            style.visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(170); // Darker gray handle
+            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_gray(140);  // Even darker when hovered
+            style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(110);   // Darkest when clicked
             
             // --- Colors (Classic Gray) ---
             let classic_gray = egui::Color32::from_rgb(212, 208, 200);
@@ -770,29 +802,22 @@ fn main() -> eframe::Result<()> {
         }),
     ) {
         // CRITICAL FIX: Show a Message Box if the Graphics Engine (WGPU) fails to init
-        eprintln!("Fatal Graphics Error: {}", e);
+        eprintln!("Fatal Graphics Error: {e}");
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
             .set_title("Fatal Graphics Error")
-            .set_description(&format!(
-                "Failed to initialize graphics engine (WGPU/OpenGL).\n\nError: {}\n\nTry updating your graphics drivers or use the --software flag.", 
-                e
+            .set_description(format!(
+                "Failed to initialize graphics engine (WGPU/OpenGL).\n\nError: {e}\n\nTry updating your graphics drivers or use the --software flag."
             ))
             .show();
         std::process::exit(1);
     }
-    Ok(())
 }
 
 fn parse_full_logic(path: &str) -> std::io::Result<Vec<RadiusRequest>> {
     let content = fs::read_to_string(path)?;
-    let wrapped_content = format!("<events>{}</events>", content);
+    let wrapped_content = format!("<events>{content}</events>");
     
-    #[derive(Deserialize)]
-    struct Root {
-        #[serde(rename = "Event", default)]
-        events: Vec<Event>,
-    }
 
     let root: Root = from_str(&wrapped_content).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let mut events = root.events;
@@ -815,20 +840,19 @@ fn process_group(group: &[Event]) -> RadiusRequest {
         let p_type = event.packet_type.as_deref().unwrap_or("");
         if p_type == "1" || p_type == "4" {
             if let Some(val) = &event.timestamp { 
-                req.timestamp = val.clone();
+                req.timestamp.clone_from(val);
                 req.parsed_time = RadiusRequest::parse_timestamp(val);
             }
-            if let Some(val) = &event.acct_session_id { req.session_id = val.clone(); }
-            if let Some(val) = &event.server { req.server = val.clone(); }
-            if let Some(val) = &event.ap_ip { req.ap_ip = val.clone(); }
-            if let Some(val) = &event.ap_ip { req.ap_ip = val.clone(); }
-            if let Some(val) = &event.client_friendly_name { req.ap_name = val.clone(); }
-            else if let Some(val) = &event.ap_name { req.ap_name = val.clone(); }
-            if let Some(val) = &event.mac { req.mac = val.clone(); }
-            if let Some(val) = &event.class { req.class_id = val.clone(); }
+            if let Some(val) = &event.acct_session_id { req.session_id.clone_from(val); }
+            if let Some(val) = &event.server { req.server.clone_from(val); }
+            if let Some(val) = &event.ap_ip { req.ap_ip.clone_from(val); }
+            if let Some(val) = &event.client_friendly_name { req.ap_name.clone_from(val); }
+            else if let Some(val) = &event.ap_name { req.ap_name.clone_from(val); }
+            if let Some(val) = &event.mac { req.mac.clone_from(val); }
+            if let Some(val) = &event.class { req.class_id.clone_from(val); }
             req.req_type = map_packet_type(p_type);
-            if let Some(user) = &event.sam_account { req.user = user.clone(); } 
-            else if let Some(user) = &event.user_name { req.user = user.clone(); } 
+            if let Some(user) = &event.sam_account { req.user.clone_from(user); } 
+            else if let Some(user) = &event.user_name { req.user.clone_from(user); } 
             else { req.user = "- UNKNOWN -".to_string(); }
         } else {
             req.resp_type = map_packet_type(p_type);
@@ -844,7 +868,7 @@ fn process_group(group: &[Event]) -> RadiusRequest {
     // Ideally we'd map these to Theme colors, but let's stick to these for now.
 
     if req.class_id.is_empty() && !group.is_empty() {
-         if let Some(c) = &group[0].class { req.class_id = c.clone(); }
+         if let Some(c) = &group[0].class { req.class_id.clone_from(c); }
     }
     req
 }
@@ -941,17 +965,15 @@ fn map_reason(code: &str) -> String {
         "283" => "Authentication failed. The certificate does not contain the Client Authentication purpose in Application Policies extensions.".to_string(),
         "284" => "Authentication failed. The certificate issuer and the parent of the certificate in the certificate chain do not match.".to_string(),
         "285" => "Authentication failed. NPS cannot locate the certificate, or the certificate is incorrectly formed.".to_string(),
-        "286" => "Authentication failed. The CA is not trusted by the NPS server.".to_string(),
+        "286" | "295" => "Authentication failed. The CA is not trusted by the NPS server.".to_string(),
         "287" => "Authentication failed. The certificate does not chain to an enterprise root CA that NPS trusts.".to_string(),
         "288" => "Authentication failed due to an unspecified trust failure.".to_string(),
         "289" => "Authentication failed. The certificate provided by the connecting user or computer is revoked.".to_string(),
         "290" => "Authentication failed. A test or trial certificate is in use, however the test root CA is not trusted.".to_string(),
         "291" => "Authentication failed because NPS cannot locate and access the certificate revocation list.".to_string(),
         "292" => "Authentication failed. The User-Name attribute does not match the CN in the certificate.".to_string(),
-        "293" => "Authentication failed. The certificate is not configured with the Client Authentication purpose.".to_string(),
+        "293" | "296" => "Authentication failed. The certificate is not configured with the Client Authentication purpose.".to_string(),
         "294" => "Authentication failed because the certificate was explicitly marked as untrusted by the Administrator.".to_string(),
-        "295" => "Authentication failed. The CA is not trusted by the NPS server.".to_string(),
-        "296" => "Authentication failed. The certificate is not configured with the Client Authentication purpose.".to_string(),
         "297" => "Authentication failed. The certificate does not have a valid name.".to_string(),
         "298" => "Authentication failed. Either the certificate does not contain a valid UPN or the User-Name does not match.".to_string(),
         "299" => "Authentication failed. The sequence of information provided by internal components or protocols is incorrect.".to_string(),
