@@ -226,11 +226,12 @@ impl AboutWindow {
     }
 }
 
-#[derive(Clone, Copy)]
 struct CellParams<'a> {
     row_index: usize,
     is_selected: bool,
     item: &'a RadiusRequest,
+    // Add Arc reference to allow deferred calculations in context menus
+    items_ref: Arc<Vec<RadiusRequest>>,
     next_search: &'a Arc<Mutex<Option<String>>>,
     next_status: &'a Arc<Mutex<Option<String>>>,
     text_color: egui::Color32,
@@ -620,7 +621,7 @@ impl RadiusBrowserApp {
         ui: &mut egui::Ui,
         text: &str,
         col_name: &str,
-        params: CellParams,
+        params: &CellParams,
     ) -> bool {
         let mut clicked = false;
         let rect = ui.max_rect();
@@ -633,6 +634,7 @@ impl RadiusBrowserApp {
         if response.clicked() {
             clicked = true;
         }
+
         // Use a Label with truncation to prevent text overflow into other columns
         // We use the full cell rect for the label but add small padding
         let label_rect = rect.shrink2(egui::vec2(4.0, 0.0));
@@ -645,26 +647,45 @@ impl RadiusBrowserApp {
                 ).truncate());
             });
         });
-        let text_val = text.to_string();
-        let row_tsv = params.item.to_tsv();
+
+        // Context menu (calculations deferred until opened)
+        // We capture Arcs and index to avoid per-frame string allocations
+        let items_ref = Arc::clone(&params.items_ref);
+        let row_index = params.row_index;
+        let col_name_owned = col_name.to_lowercase();
         let ns = params.next_search.clone();
         let status_ref = params.next_status.clone();
+        
         response.context_menu(move |ui| {
+            // Get the item and specific text ONLY when menu is shown
+            let item = &items_ref[row_index];
+            let cell_text = match col_name_owned.as_str() {
+                "ts" => &item.timestamp,
+                "type" => &item.req_type,
+                "srv" => &item.server,
+                "ip" => &item.ap_ip,
+                "ap" => &item.ap_name,
+                "mac" => &item.mac,
+                "user" => &item.user,
+                _ => if item.reason.is_empty() { &item.resp_type } else { &item.reason },
+            }.clone();
+
             ui.add_enabled_ui(true, |ui| {
-                if ui.button(format!("Filter by '{}'", &text_val)).clicked() {
-                    *ns.lock().expect("Lock failed") = Some(text_val.clone());
+                if ui.button(format!("Filter by '{}'", &cell_text)).clicked() {
+                    *ns.lock().expect("Lock failed") = Some(cell_text.clone());
                     ui.close();
                 }
             });
             ui.separator();
             ui.add_enabled_ui(true, |ui| {
                 if ui.button("Copy Cell Value").clicked() {
-                    ui.ctx().copy_text(text_val.clone());
-                    *status_ref.lock().expect("Lock failed") = Some(format!("Copied to clipboard: '{}'", &text_val));
+                    ui.ctx().copy_text(cell_text.clone());
+                    *status_ref.lock().expect("Lock failed") = Some(format!("Copied to clipboard: '{}'", &cell_text));
                     ui.close();
                 }
                 if ui.button("Copy Entire Row").clicked() {
-                    ui.ctx().copy_text(row_tsv.clone());
+                    let row_tsv = item.to_tsv();
+                    ui.ctx().copy_text(row_tsv);
                     *status_ref.lock().expect("Lock failed") = Some("Row copied to clipboard".to_string());
                     ui.close();
                 }
@@ -753,6 +774,7 @@ impl RadiusBrowserApp {
                             row_index,
                             is_selected,
                             item,
+                            items_ref: Arc::clone(&self.filtered_items),
                             next_search: &next_search,
                             next_status: &next_status,
                             text_color,
@@ -764,16 +786,16 @@ impl RadiusBrowserApp {
 
                         let nsel = &next_sel;
 
-                        row.col(|ui| if Self::render_table_cell(ui, &item.timestamp, "ts", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.req_type, "type", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.server, "srv", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_ip, "ip", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_name, "ap", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.mac, "mac", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.user, "user", params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.timestamp, "ts", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.req_type, "type", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.server, "srv", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_ip, "ip", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_name, "ap", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.mac, "mac", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        row.col(|ui| if Self::render_table_cell(ui, &item.user, "user", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
                         row.col(|ui| { 
                             let text = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
-                            if Self::render_table_cell(ui, text, "res", params) {
+                            if Self::render_table_cell(ui, text, "res", &params) {
                                 *nsel.lock().expect("Lock failed") = Some(row_index);
                             }
                         });
