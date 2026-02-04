@@ -96,6 +96,7 @@ impl RadiusRequest {
 #[derive(Default)]
 struct AboutWindow {
     open: bool,
+    gpu_info: String,
 }
 
 impl AboutWindow {
@@ -170,6 +171,18 @@ impl AboutWindow {
                 ui.label("High-performance viewer for Microsoft NPS/IAS RADIUS logs.");
                 ui.label("Built with Rust and egui for maximum speed and zero dependencies.");
                 
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(15.0);
+                
+                // System Info Section
+                ui.label(egui::RichText::new("🖥️ System Information").size(14.0).strong());
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.set_min_width(450.0);
+                    ui.label(egui::RichText::new(format!("Graphics Adapter: {}", self.gpu_info)).size(12.0));
+                });
+
                 ui.add_space(15.0);
                 ui.separator();
                 ui.add_space(15.0);
@@ -254,6 +267,8 @@ struct RadiusBrowserApp {
     about_window: AboutWindow,
     sort_column: Option<SortColumn>,
     sort_descending: bool,
+    #[serde(skip)]
+    gpu_info: String,
 }
 
 impl Default for RadiusBrowserApp {
@@ -270,6 +285,7 @@ impl Default for RadiusBrowserApp {
             about_window: AboutWindow::default(),
             sort_column: Some(SortColumn::Timestamp),
             sort_descending: true, // Default: Newest first
+            gpu_info: "Unknown / Detecting...".to_string(),
         }
     }
 }
@@ -955,13 +971,15 @@ fn main() {
     
     // 1. System Theme Support (Dark/Light auto-detect)
     let force_software = std::env::args().any(|x| x == "--software");
+    let gpu_info_capture = Arc::new(Mutex::new("Unknown".to_string()));
+    let gpu_info_clone = gpu_info_capture.clone();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0]),
         // WGPU configuration to force WARP (software rendering) or maximum compatibility
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            present_mode: eframe::wgpu::PresentMode::Fifo, // VSync enabled
+            present_mode: eframe::wgpu::PresentMode::AutoNoVsync, // Reduced latency
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
                 eframe::egui_wgpu::WgpuSetupCreateNew {
                     instance_descriptor: eframe::wgpu::InstanceDescriptor {
@@ -970,25 +988,26 @@ fn main() {
                     },
                     native_adapter_selector: Some(std::sync::Arc::new(move |adapters, _surface| {
                        // Select adapter based on preference
-                       if force_software {
+                       let selected = if force_software {
                            // Try to find Software/CPU adapter (WARP on Windows)
-                           // WARP often shows as "Microsoft Basic Render Driver"
-                           if let Some(adapter) = adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::Cpu 
+                           adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::Cpu 
                                || a.get_info().name.contains("Basic Render Driver")
-                               || a.get_info().name.contains("llvmpipe")) {
-                               println!("Selected Software Adapter via --software: {}", adapter.get_info().name);
-                               return Ok(adapter.clone());
-                           }
-                           eprintln!("Warning: --software specified but no explicit software adapter found. Falling back to default.");
-                       }
+                               || a.get_info().name.contains("llvmpipe"))
+                               .or_else(|| adapters.first())
+                       } else {
+                           // Default: Prefer Discrete, then Integrated, then whatever
+                           adapters.iter()
+                               .find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::DiscreteGpu)
+                               .or_else(|| adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu))
+                               .or_else(|| adapters.first())
+                       };
                        
-                       // Default: Prefer Discrete, then Integrated, then whatever
-                       let adapter = adapters.iter()
-                           .find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::DiscreteGpu)
-                           .or_else(|| adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu))
-                           .or_else(|| adapters.first());
-                           
-                       adapter.cloned().ok_or_else(|| "No adapter found".to_owned())
+                       let adapter = selected.cloned().ok_or_else(|| "No adapter found".to_owned())?;
+                       if let Ok(mut info) = gpu_info_clone.lock() {
+                           let i = adapter.get_info();
+                           *info = format!("{} ({:?} / {:?})", i.name, i.device_type, i.backend);
+                       }
+                       Ok(adapter)
                     })),
                     ..Default::default()
                 }
@@ -1005,10 +1024,16 @@ fn main() {
             configure_styles(&cc.egui_ctx);
             
             // Load persistent state if available
-            let app = cc.storage.map_or_else(RadiusBrowserApp::default, |storage| {
+            let mut app = cc.storage.map_or_else(RadiusBrowserApp::default, |storage| {
                 eframe::get_value::<RadiusBrowserApp>(storage, "radius_browser_state")
                     .unwrap_or_default()
             });
+
+            // Set final GPU info
+            if let Ok(info) = gpu_info_capture.lock() {
+                app.gpu_info.clone_from(&info);
+                app.about_window.gpu_info.clone_from(&info);
+            }
             
             Ok(Box::new(app))
         }),
