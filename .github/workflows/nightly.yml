@@ -1,0 +1,57 @@
+name: Nightly Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  nightly:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          # Compilation en mode Release
+          cargo build --release --verbose
+
+      - name: Verify Binary Exists
+        shell: pwsh
+        run: |
+          $binary = "target/release/radius-log-browser-rs.exe"
+          if (Test-Path $binary) {
+              Write-Host "SUCCESS: Binary generated at $binary"
+          } else {
+              Write-Error "FATAL: Binary not found after build."
+              exit 1
+          }
+
+      - name: Update Nightly Tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly
+          git push -f origin nightly
+
+      - name: Upload Nightly Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Nightly Build
+          tag_name: nightly
+          files: target/release/radius-log-browser-rs.exe
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
