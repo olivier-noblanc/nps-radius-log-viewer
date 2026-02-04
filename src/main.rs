@@ -706,7 +706,7 @@ impl RadiusBrowserApp {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) -> bool {
+    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>, frame_gap: std::time::Duration) -> bool {
         let render_start = std::time::Instant::now();
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
@@ -848,7 +848,11 @@ impl RadiusBrowserApp {
         if let Some(idx) = clicked_row {
             let interaction_start = std::time::Instant::now();
             self.selected_row = Some(idx);
-            self.add_debug_log(format!("Row {} clicked, state updated in {:?}", idx, interaction_start.elapsed()));
+            let elapsed = interaction_start.elapsed();
+            self.add_debug_log(format!(
+                "🎯 Row {} Clicked | Gap: {:?} | State Update: {:?}", 
+                idx, frame_gap, elapsed
+            ));
             self.burst_repaints = 10; // Keep GPU "hot" for 10 frames after interaction
             ctx.request_repaint();
         }
@@ -968,9 +972,10 @@ impl eframe::App for RadiusBrowserApp {
 
         let central_start = Instant::now();
         let click_occurred = egui::CentralPanel::default().show(ctx, |ui| {
-            self.render_central_table(ctx, ui, scroll_target)
+            self.render_central_table(ctx, ui, scroll_target, frame_delta)
         }).inner;
         let central_elapsed = central_start.elapsed();
+        let abs_now = chrono::Local::now().format("%H:%M:%S%.3f");
 
         let windows_start = Instant::now();
         self.about_window.show(ctx);
@@ -981,8 +986,8 @@ impl eframe::App for RadiusBrowserApp {
         // Log every frame that has a click, OR every slow frame
         if total_elapsed.as_millis() > 16 || click_occurred {
             self.add_debug_log(format!(
-                "⏱️ UPDATE: {:?} [Top: {:?}, Central: {:?}] (Click: {})",
-                total_elapsed, top_elapsed, central_elapsed, click_occurred
+                "⏱️ UPDATE @ {} | Dur: {:?} [Top: {:?}, Central: {:?}] (Click: {})",
+                abs_now, total_elapsed, top_elapsed, central_elapsed, click_occurred
             ));
         }
     }
