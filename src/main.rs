@@ -580,15 +580,10 @@ impl RadiusBrowserApp {
             }
             ui.label(status_trunk);
             ui.add_space(4.0);
-            
-            if inner_start.elapsed().as_millis() > 10 {
-                // Not using add_debug_log here to avoid recursion if logging is too slow
-                eprintln!("[DEBUG] Top Panel Inner took {:?}", inner_start.elapsed());
-            }
         });
 
-        if start.elapsed().as_millis() > 10 {
-            self.add_debug_log(format!("⏱️ Total render_top_panel: {:?}", start.elapsed()));
+        if start.elapsed().as_millis() > 50 {
+            self.add_debug_log(format!("⏱️ render_top_panel SLOW: {:?}", start.elapsed()));
         }
         filter_changed
     }
@@ -973,10 +968,10 @@ impl eframe::App for RadiusBrowserApp {
         let windows_elapsed = windows_start.elapsed();
 
         let total_elapsed = update_start.elapsed();
-        if total_elapsed.as_millis() > 10 {
+        if total_elapsed.as_millis() > 16 {
             self.add_debug_log(format!(
-                "⏱️ UPDATE: {:?} [Top: {:?}, Nav: {:?}, Bot: {:?}, Central: {:?}, Windows: {:?}]",
-                total_elapsed, top_elapsed, nav_elapsed, bottom_elapsed, central_elapsed, windows_elapsed
+                "⏱️ SLOW UPDATE: {:?} [Top: {:?}, Central: {:?}]",
+                total_elapsed, top_elapsed, central_elapsed
             ));
         }
     }
