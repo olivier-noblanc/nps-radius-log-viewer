@@ -106,7 +106,7 @@ impl AboutWindow {
         
         let mut should_close = false;
         
-        egui::Window::new("À propos")
+        egui::Window::new("About")
             .open(&mut self.open)
             .resizable(false)
             .collapsible(false)
@@ -125,7 +125,7 @@ impl AboutWindow {
                 ui.separator();
                 ui.add_space(15.0);
                 
-                // Section Auteur
+                // Author Section
                 ui.group(|ui| {
                     ui.set_min_width(450.0);
                     ui.add_space(8.0);
@@ -133,7 +133,7 @@ impl AboutWindow {
                         ui.label(egui::RichText::new("👤").size(18.0));
                         ui.add_space(8.0);
                         ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("Développé par").size(11.0).color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new("Developed by").size(11.0).color(egui::Color32::GRAY));
                             ui.label(egui::RichText::new("Olivier Noblanc").size(15.0).strong());
                         });
                     });
@@ -142,7 +142,7 @@ impl AboutWindow {
                 
                 ui.add_space(12.0);
                 
-                // Section Projet
+                // Project Section
                 ui.group(|ui| {
                     ui.set_min_width(450.0);
                     ui.add_space(8.0);
@@ -150,7 +150,7 @@ impl AboutWindow {
                         ui.label(egui::RichText::new("🔗").size(18.0));
                         ui.add_space(8.0);
                         ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("Dépôt GitHub").size(11.0).color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new("GitHub Repository").size(11.0).color(egui::Color32::GRAY));
                             ui.hyperlink_to(
                                 egui::RichText::new("olivier-noblanc/nps-radius-log-viewer").size(13.0),
                                 "https://github.com/olivier-noblanc/nps-radius-log-viewer"
@@ -167,8 +167,8 @@ impl AboutWindow {
                 // Description
                 ui.label(egui::RichText::new("📝 Description").size(14.0).strong());
                 ui.add_space(8.0);
-                ui.label("Visualiseur haute performance pour les logs RADIUS de Microsoft NPS/IAS.");
-                ui.label("Construit avec Rust et egui pour une vitesse maximale et zéro dépendance.");
+                ui.label("High-performance viewer for Microsoft NPS/IAS RADIUS logs.");
+                ui.label("Built with Rust and egui for maximum speed and zero dependencies.");
                 
                 ui.add_space(15.0);
                 ui.separator();
@@ -176,7 +176,7 @@ impl AboutWindow {
                 
                 // Licence
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("⚖️ Licence :").size(13.0).strong());
+                    ui.label(egui::RichText::new("⚖️ License:").size(13.0).strong());
                     ui.label(egui::RichText::new("MIT / Apache 2.0").size(13.0));
                 });
                 
@@ -184,11 +184,11 @@ impl AboutWindow {
                 ui.separator();
                 ui.add_space(15.0);
                 
-                // Crédit
-                ui.label(egui::RichText::new("🙏 Remerciements").size(13.0).strong());
+                // Credits
+                ui.label(egui::RichText::new("🙏 Acknowledgements").size(13.0).strong());
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.label("Basé sur le projet original de");
+                    ui.label("Based on the original project by");
                     ui.hyperlink_to(
                         "burnacid",
                         "https://github.com/burnacid/RADIUS-Log-Browser"
@@ -197,7 +197,7 @@ impl AboutWindow {
                 
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| {
-                    if ui.button(egui::RichText::new("Fermer").size(14.0)).clicked() {
+                    if ui.button(egui::RichText::new("Close").size(14.0)).clicked() {
                         should_close = true;
                     }
                 });
@@ -775,15 +775,15 @@ impl eframe::App for RadiusBrowserApp {
             self.render_central_table(ctx, ui, scroll_target);
         });
         
-        // Afficher la fenêtre About si ouverte
+        // Show About window if open
         self.about_window.show(ctx);
     }
 }
 
 
 fn get_windows_system_font() -> (String, f32) {
-    // Note: font-kit peut être lent ou planter dans certains environnements (ex: Hyper-V, serveurs sans polices)
-    // On utilise un fallback immédiat si quoi que ce soit échoue.
+    // Note: font-kit can be slow or crash in some environments (e.g. Hyper-V, servers without fonts)
+    // We use a safe fallback if anything fails.
     
     let result = std::panic::catch_unwind(|| {
         use font_kit::source::SystemSource;
@@ -805,26 +805,26 @@ fn get_windows_system_font() -> (String, f32) {
     }
 }
 fn main() {
-    // Configuration du gestionnaire de panique (MessageBox) pour environnements sans console
+    // Set up panic handler with MessageBox for console-less environments
     std::panic::set_hook(Box::new(|panic_info| {
-        let location = panic_info.location().map(|l| format!("à {}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "lieu inconnu".to_string());
+        let location = panic_info.location().map(|l| format!("at {message}:{line}:{column}", message=l.file(), line=l.line(), column=l.column())).unwrap_or_else(|| "unknown location".to_string());
         let payload = panic_info.payload();
         let message = if let Some(s) = payload.downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = payload.downcast_ref::<String>() {
             s.clone()
         } else {
-            "Une panique inconnue est survenue.".to_string()
+            "An unknown panic occurred.".to_string()
         };
 
-        let fatal_message = format!("Une erreur fatale est survenue :\n\n{message}\n\nLieu : {location}\n\nL'application va se fermer.");
+        let fatal_message = format!("A fatal error occurred:\n\n{message}\n\nLocation: {location}\n\nThe application will close.");
         
-        eprintln!("PANIC: {}", fatal_message);
+        eprintln!("PANIC: {fatal_message}");
 
-        // Affichage de la boîte de dialogue
+        // Display MessageDialog
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("Crash de l'application")
+            .set_title("Application Crash")
             .set_description(fatal_message)
             .show();
     }));
@@ -835,9 +835,9 @@ fn main() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0]),
-        // Configuration WGPU pour forcer WARP (Rendu logiciel) ou compatibilité maximale
+        // WGPU configuration to force WARP (software rendering) or maximum compatibility
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            present_mode: eframe::wgpu::PresentMode::Fifo, // VSync activé
+            present_mode: eframe::wgpu::PresentMode::Fifo, // VSync enabled
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
                 eframe::egui_wgpu::WgpuSetupCreateNew {
                     instance_descriptor: eframe::wgpu::InstanceDescriptor {
@@ -938,7 +938,7 @@ fn main() {
             // Striped Table
             style.visuals.striped = true;
 
-            // Fonts - Récupération dynamique de la police système Windows
+            // Fonts - Dynamic retrieval of Windows system font
             let mut fonts = egui::FontDefinitions::default();
             let (system_font, system_size) = get_windows_system_font();
 
