@@ -716,6 +716,7 @@ impl RadiusBrowserApp {
         let next_sort_col = Arc::new(Mutex::new(None)); 
         let next_status = Arc::new(Mutex::new(None)); 
         let next_copy = Arc::new(Mutex::new(None)); 
+        let mut hovered_row_idx = None;
 
         // Local state for immediate detection within this frame
         let mut clicked_row = None;
@@ -821,33 +822,36 @@ impl RadiusBrowserApp {
                         });
 
                         // Interaction: Whole Row
-                        // Using PointerButton::Primary press for absolute fastest response
+                        // Using clicked_by instead of manual press detection to avoid multi-triggering
                         let row_response = row.response().interact(egui::Sense::click());
-                        
-                        if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) && row_response.hovered() {
-                             clicked_row = Some(row_index);
-                             // Force repaint to show the background highlight in the same frame if possible
-                             ctx.request_repaint(); 
-                        }
                         
                         if row_response.clicked() {
                             clicked_row = Some(row_index);
                         }
-                        
-                        // Smart Context Menu - Only formats TSV if button is actually clicked
-                        let copy_ref_local = copy_ref.clone();
-                        let items_for_menu_local = items_for_menu.clone();
-                        row_response.context_menu(move |ui| {
-                            if ui.button("Copy Entire Row (TSV)").clicked() {
-                                let tsv_content = items_for_menu_local[row_index].to_tsv();
-                                if let Ok(mut guard) = copy_ref_local.lock() {
-                                    *guard = Some(tsv_content);
-                                }
-                                ui.close();
-                            }
-                        });
+
+                        if row_response.secondary_clicked() {
+                             // This handles right-click selection as well
+                             clicked_row = Some(row_index);
+                        }
+
+                        if row_response.hovered() {
+                            hovered_row_idx = Some(row_index);
+                        }
                     });
                 });
+
+                // Global Context Menu for the Table
+                if let Some(h_idx) = hovered_row_idx {
+                    ui.interact(ui.max_rect(), ui.id(), egui::Sense::click()).context_menu(|ui| {
+                        if ui.button("📋 Copy Entire Row (TSV)").clicked() {
+                            let tsv_content = items_arc[h_idx].to_tsv();
+                            if let Ok(mut guard) = next_copy.lock() {
+                                *guard = Some(tsv_content);
+                            }
+                            ui.close();
+                        }
+                    });
+                }
             });
         });
 
