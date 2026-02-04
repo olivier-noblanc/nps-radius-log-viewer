@@ -645,16 +645,22 @@ impl RadiusBrowserApp {
     fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) {
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
-        // Shared state for closures (Arc<Mutex> avoids lifetime issues with egui's nested closures)
+        // Shared state for closures that need cross-frame or cross-thread persistence
         let next_sort_col = Arc::new(Mutex::new(None)); 
-        let next_sel = Arc::new(Mutex::new(None));
         let next_status = Arc::new(Mutex::new(None)); 
         let next_copy = Arc::new(Mutex::new(None)); 
+
+        // Local state for immediate detection within this frame
+        let mut clicked_row = None;
 
         let ws = self.col_widths.clone();
         let current_sort_col = self.sort_column;
         let is_descending = self.sort_descending;
         let selected_idx = self.selected_row;
+        
+        // Capture items to avoid reaching into 'self' repeatedly
+        let items_arc = self.filtered_items.clone();
+        let items_len = items_arc.len();
 
         ui.push_id(self.layout_version, |ui| {
             egui::ScrollArea::horizontal()
@@ -714,32 +720,26 @@ impl RadiusBrowserApp {
                     header.col(|ui| header_btn(ui, "Result/Reason", SortColumn::Reason));
                 })
                 .body(|body| {
-                    let sel_ref = next_sel.clone();
-                    let copy_ref = next_copy.clone();
                     let dark_mode = ctx.style().visuals.dark_mode;
+                    let copy_ref = next_copy.clone();
+                    let items_for_menu = items_arc.clone();
 
-                    body.rows(text_height, self.filtered_items.len(), |mut row| {
+                    body.rows(text_height, items_len, |mut row| {
                         let row_index = row.index();
-                        let item = &self.filtered_items[row_index];
+                        let item = &items_arc[row_index];
                         let is_selected = selected_idx == Some(row_index);
                         
                         let text_color = if is_selected {
                             egui::Color32::WHITE
+                        } else if item.bg_color.is_some() {
+                             egui::Color32::BLACK
                         } else if dark_mode {
                             egui::Color32::LIGHT_GRAY
                         } else {
                             egui::Color32::BLACK
                         };
 
-                        let params = CellParams {
-                            is_selected,
-                            item,
-                            text_color: if item.bg_color.is_some() && !is_selected { 
-                                egui::Color32::BLACK 
-                            } else { 
-                                text_color 
-                            },
-                        };
+                        let params = CellParams { is_selected, item, text_color };
 
                         row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
                         row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
@@ -754,22 +754,17 @@ impl RadiusBrowserApp {
                         });
 
                         // Interaction: Whole Row
-                        // We must explicitly sense clicks because cells are passive (selectable(false))
-                        let row_combined_response = row.response().interact(egui::Sense::click());
-                        
-                        // Selection on click
-                        if row_combined_response.clicked() {
-                            if let Ok(mut guard) = sel_ref.lock() {
-                                *guard = Some(row_index);
-                            }
-                            ctx.request_repaint(); // Instant visual feedback
+                        let row_response = row.response().interact(egui::Sense::click());
+                        if row_response.clicked() {
+                            clicked_row = Some(row_index);
                         }
                         
-                        // Smart Context Menu on the row
+                        // Smart Context Menu - Only formats TSV if button is actually clicked
                         let copy_ref_local = copy_ref.clone();
-                        let tsv_content = item.to_tsv();
-                        row_combined_response.context_menu(move |ui| {
+                        let items_for_menu_local = items_for_menu.clone();
+                        row_response.context_menu(move |ui| {
                             if ui.button("Copy Entire Row (TSV)").clicked() {
+                                let tsv_content = items_for_menu_local[row_index].to_tsv();
                                 if let Ok(mut guard) = copy_ref_local.lock() {
                                     *guard = Some(tsv_content);
                                 }
@@ -781,7 +776,13 @@ impl RadiusBrowserApp {
             });
         });
 
-        // Apply deferred updates (Using .lock().ok() pattern to avoid lifetime issues with temporaries)
+        // Apply immediate updates detected during the frame
+        if let Some(idx) = clicked_row {
+            self.selected_row = Some(idx);
+            ctx.request_repaint();
+        }
+
+        // Apply deferred updates
         if let Some(col) = next_sort_col.lock().ok().and_then(|mut g| g.take()) {
             if self.sort_column == Some(col) {
                 self.sort_descending = !self.sort_descending;
@@ -794,11 +795,6 @@ impl RadiusBrowserApp {
             }
             self.apply_filter();
             ctx.request_repaint();
-        }
-
-        if let Some(idx) = next_sel.lock().ok().and_then(|mut g| g.take()) {
-            self.selected_row = Some(idx);
-            ctx.request_repaint(); // Redraw immediately to show selection
         }
 
         if let Some(tsv) = next_copy.lock().ok().and_then(|mut g| g.take()) {
