@@ -754,14 +754,15 @@ impl RadiusBrowserApp {
                         });
 
                         // Interaction: Whole Row
-                        let row_combined_response = row.response();
+                        // We must explicitly sense clicks because cells are passive (selectable(false))
+                        let row_combined_response = row.response().interact(egui::Sense::click());
                         
                         // Selection on click
                         if row_combined_response.clicked() {
                             if let Ok(mut guard) = sel_ref.lock() {
                                 *guard = Some(row_index);
                             }
-                            ctx.request_repaint(); // Instant visual feedback (using ctx instead of ui.ctx() to fix E0502)
+                            ctx.request_repaint(); // Instant visual feedback
                         }
                         
                         // Smart Context Menu on the row
