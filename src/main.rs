@@ -807,15 +807,14 @@ fn get_windows_system_font() -> (String, f32) {
 fn main() {
     // Set up panic handler with MessageBox for console-less environments
     std::panic::set_hook(Box::new(|panic_info| {
-        let location = panic_info.location().map(|l| format!("at {message}:{line}:{column}", message=l.file(), line=l.line(), column=l.column())).unwrap_or_else(|| "unknown location".to_string());
+        let location = panic_info.location()
+            .map(|l| format!("at {file}:{line}:{col}", file=l.file(), line=l.line(), col=l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
         let payload = panic_info.payload();
-        let message = if let Some(s) = payload.downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "An unknown panic occurred.".to_string()
-        };
+        let message = payload.downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "An unknown panic occurred.".to_string());
 
         let fatal_message = format!("A fatal error occurred:\n\n{message}\n\nLocation: {location}\n\nThe application will close.");
         
@@ -938,16 +937,14 @@ fn main() {
             // Striped Table
             style.visuals.striped = true;
 
-            // Fonts - Dynamic retrieval of Windows system font
-            let mut fonts = egui::FontDefinitions::default();
-            let (system_font, system_size) = get_windows_system_font();
-
-            fonts.families.insert(
-                egui::FontFamily::Proportional,
-                vec![system_font]
-            );
-            cc.egui_ctx.set_fonts(fonts);
-
+            // Fonts - Dynamic retrieval of Windows system font size
+            let (_, system_size) = get_windows_system_font();
+            
+            // Note: We avoid manual font registration because egui requires the actual font DATA
+            // to be loaded into FontDefinitions, otherwise it panics with "No font data found".
+            // By NOT setting custom fonts here, we rely on eframe's robust default fonts
+            // while still applying the system-preferred font size.
+            
             style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(system_size));
             style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(system_size));
             style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(system_size * 1.33));
