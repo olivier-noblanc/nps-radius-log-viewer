@@ -1144,21 +1144,58 @@ fn load_icon() -> Option<egui::IconData> {
 fn main() {
     setup_panic_hook();
     
-    // 1. System Theme Support (Dark/Light auto-detect)
     let force_software = std::env::args().any(|x| x == "--software");
-    let gpu_info_capture = Arc::new(Mutex::new("Unknown".to_string()));
-    let gpu_info_clone = gpu_info_capture.clone();
-    
-    // Load icon for the taskbar
+    let gpu_info_capture = Arc::new(Mutex::new("Detecting...".to_string()));
     let app_icon = load_icon();
 
+    // 1. Try GLOW (OpenGL) first for high-performance Glide-wrapper support
+    // We only skip this if --software is requested.
+    if !force_software {
+        let options = eframe::NativeOptions {
+            renderer: eframe::Renderer::Glow,
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1200.0, 800.0])
+                .with_icon(app_icon.clone().unwrap_or_default()),
+            ..Default::default()
+        };
+
+        let gpu_info_glow = gpu_info_capture.clone();
+        let result = eframe::run_native(
+            "Radius Log Browser (OpenGL Mode)",
+            options,
+            Box::new(move |cc| {
+                configure_styles(&cc.egui_ctx);
+                let mut app = cc.storage.map_or_else(RadiusBrowserApp::default, |storage| {
+                    eframe::get_value::<RadiusBrowserApp>(storage, "radius_browser_state")
+                        .unwrap_or_default()
+                });
+                
+                let info = "Hardware Accelerated (OpenGL/Glide)".to_string();
+                if let Ok(mut g) = gpu_info_glow.lock() { *g = info.clone(); }
+                app.gpu_info.clone_from(&info);
+                app.about_window.gpu_info = info;
+
+                Ok(Box::new(app))
+            }),
+        );
+
+        if result.is_ok() {
+            return;
+        }
+        eprintln!("OpenGL Mode failed or was not supported. Falling back to WGPU...");
+    }
+
+    // 2. Fallback to WGPU (or forced Software mode)
+    let gpu_info_wgpu = gpu_info_capture.clone();
+    let gpu_info_clone = gpu_info_capture.clone();
+    
     let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
             .with_icon(app_icon.unwrap_or_default()),
-        // WGPU configuration to force WARP (software rendering) or maximum compatibility
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            present_mode: eframe::wgpu::PresentMode::AutoNoVsync, // Reduced latency
+            present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
                 eframe::egui_wgpu::WgpuSetupCreateNew {
                     instance_descriptor: eframe::wgpu::InstanceDescriptor {
@@ -1166,15 +1203,12 @@ fn main() {
                         ..Default::default()
                     },
                     native_adapter_selector: Some(std::sync::Arc::new(move |adapters, _surface| {
-                       // Select adapter based on preference
                        let selected = if force_software {
-                           // Try to find Software/CPU adapter (WARP on Windows)
                            adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::Cpu 
                                || a.get_info().name.contains("Basic Render Driver")
                                || a.get_info().name.contains("llvmpipe"))
                                .or_else(|| adapters.first())
                        } else {
-                           // Default: Prefer Discrete, then Integrated, then whatever
                            adapters.iter()
                                .find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::DiscreteGpu)
                                .or_else(|| adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu))
@@ -1197,34 +1231,27 @@ fn main() {
     };
     
     if let Err(e) = eframe::run_native(
-        "Radius Log Browser (System Theme)",
+        "Radius Log Browser (WGPU Compatibility Mode)",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             configure_styles(&cc.egui_ctx);
-            
-            // Load persistent state if available
             let mut app = cc.storage.map_or_else(RadiusBrowserApp::default, |storage| {
                 eframe::get_value::<RadiusBrowserApp>(storage, "radius_browser_state")
                     .unwrap_or_default()
             });
 
-            // Set final GPU info
-            if let Ok(info) = gpu_info_capture.lock() {
+            if let Ok(info) = gpu_info_wgpu.lock() {
                 app.gpu_info.clone_from(&info);
                 app.about_window.gpu_info.clone_from(&info);
             }
-            
             Ok(Box::new(app))
         }),
     ) {
-        // CRITICAL FIX: Show a Message Box if the Graphics Engine (WGPU) fails to init
         eprintln!("Fatal Graphics Error: {e}");
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
             .set_title("Fatal Graphics Error")
-            .set_description(format!(
-                "Failed to initialize graphics engine (WGPU/OpenGL).\n\nError: {e}\n\nTry updating your graphics drivers or use the --software flag."
-            ))
+            .set_description(format!("Failed to initialize any graphics engine.\n\nError: {e}"))
             .show();
         std::process::exit(1);
     }

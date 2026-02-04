@@ -29,7 +29,7 @@ image = { version = "0.25", default-features = false, features = ["ico", "png"] 
 [dependencies.eframe]
 version = "0.33"
 default-features = false
-features = ["wgpu", "default_fonts", "wayland", "persistence"]
+features = ["wgpu", "glow", "default_fonts", "wayland", "persistence"]
 
 
 # Optimize for size while keeping debug info for crash reports
