@@ -271,6 +271,8 @@ struct RadiusBrowserApp {
     sort_descending: bool,
     #[serde(skip)]
     gpu_info: String,
+    #[serde(skip)]
+    perf_info: String,
 }
 
 impl Default for RadiusBrowserApp {
@@ -288,14 +290,18 @@ impl Default for RadiusBrowserApp {
             sort_column: Some(SortColumn::Timestamp),
             sort_descending: true, // Default: Newest first
             gpu_info: "Unknown / Detecting...".to_string(),
+            perf_info: String::new(),
         }
     }
 }
 
 impl RadiusBrowserApp {
     fn apply_filter(&mut self) {
+        let start = std::time::Instant::now();
         let query = self.search_text.trim().to_lowercase();
         let all = self.items.clone();
+        
+        eprintln!("[DEBUG] apply_filter started (query: '{}')", query);
         
         // 1. Identify "Failed Sessions" by Acct-Session-Id
         // We collect the Session IDs of all Access-Rejects.
@@ -396,6 +402,10 @@ impl RadiusBrowserApp {
             
         self.filtered_items = Arc::new(filtered);
         self.selected_row = None;
+        
+        let elapsed = start.elapsed();
+        self.perf_info = format!("Last Filter: {:?}, Items: {}", elapsed, self.filtered_items.len());
+        eprintln!("[DEBUG] apply_filter finished: {:?}", elapsed);
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -643,6 +653,7 @@ impl RadiusBrowserApp {
 
     #[allow(clippy::too_many_lines)]
     fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) {
+        let render_start = std::time::Instant::now();
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
         // Shared state for closures that need cross-frame or cross-thread persistence
@@ -778,7 +789,9 @@ impl RadiusBrowserApp {
 
         // Apply immediate updates detected during the frame
         if let Some(idx) = clicked_row {
+            let interaction_start = std::time::Instant::now();
             self.selected_row = Some(idx);
+            eprintln!("[DEBUG] Row {} clicked, state updated in {:?}", idx, interaction_start.elapsed());
             ctx.request_repaint();
         }
 
@@ -807,18 +820,34 @@ impl RadiusBrowserApp {
             self.status = msg;
             ctx.request_repaint();
         }
+
+        let render_elapsed = render_start.elapsed();
+        self.perf_info += &format!(" | Render: {:?}", render_elapsed);
+        if render_elapsed.as_millis() > 33 { // Warn if frame drops below 30FPS
+            eprintln!("[DEBUG] SLOW FRAME: {:?}", render_elapsed);
+        }
     }
 }
 
 impl eframe::App for RadiusBrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.perf_info = String::new(); // Reset telemetry for this frame
+        
         if self.render_top_panel(ctx) {
             self.apply_filter();
         }
 
         let scroll_target = self.handle_keyboard_navigation(ctx);
 
-        // --- Central Panel: Virtual Table ---
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(&self.status);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(&self.perf_info).small().color(egui::Color32::GRAY));
+                });
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_central_table(ctx, ui, scroll_target);
         });
