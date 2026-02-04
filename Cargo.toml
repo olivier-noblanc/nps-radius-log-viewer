@@ -35,8 +35,8 @@ features = ["wgpu", "default_fonts", "wayland", "persistence"]
 # Optimize for size while keeping debug info for crash reports
 [profile.release]
 opt-level = "z"     # Optimize for size
-lto = true          # Link Time Optimization
-codegen-units = 1   # Maximize optimization
+lto = "thin"        # "thin" is faster and uses less memory than true
+codegen-units = 16  # Allow parallel codegen (reduces peak memory usage)
 panic = "unwind"    # Keep unwinding for better crash reports (changed from "abort")
 strip = "symbols"   # Strip only symbols, keep debug info for line numbers
 debug = 1           # Keep minimal debug info for crash reports
