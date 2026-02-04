@@ -11,6 +11,7 @@ keywords = ["radius", "nps", "ias", "log-viewer", "network"]
 categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
+font-kit = "0.14"
 egui = "0.33"   # Immediate Mode GUI library
 egui_extras = { version = "0.33", features = ["all_loaders"] } # Table support
 quick-xml = { version = "0.38", features = ["serialize"] }
@@ -55,3 +56,6 @@ style = "warn"
 suspicious = "warn"
 unwrap_used = "warn"
 semicolon_if_nothing_returned = "warn"
+
+
+

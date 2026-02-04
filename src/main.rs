@@ -220,6 +220,18 @@ struct CellParams<'a> {
     text_color: egui::Color32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortColumn {
+    Timestamp,
+    Type,
+    Server,
+    ApIp,
+    ApName,
+    Mac,
+    User,
+    Reason,
+}
+
 struct RadiusBrowserApp {
     items: Arc<Vec<RadiusRequest>>, 
     filtered_items: Arc<Vec<RadiusRequest>>,
@@ -227,12 +239,13 @@ struct RadiusBrowserApp {
     search_text: String,
     selected_row: Option<usize>,
     // Store calculated widths: [Time, Type, Server, IP, Name, MAC, User]
-    // Store calculated widths: [Time, Type, Server, IP, Name, MAC, User]
     // Reason is remainder.
     col_widths: Vec<f32>,
     layout_version: usize,
     show_errors_only: bool, // New Filter State
     about_window: AboutWindow, // About Window
+    sort_column: Option<SortColumn>, // Sorting State
+    sort_descending: bool,
 }
 
 impl Default for RadiusBrowserApp {
@@ -247,6 +260,8 @@ impl Default for RadiusBrowserApp {
             layout_version: 0,
             show_errors_only: false,
             about_window: AboutWindow::default(),
+            sort_column: Some(SortColumn::Timestamp),
+            sort_descending: true, // Default: Newest first
         }
     }
 }
@@ -294,6 +309,64 @@ impl RadiusBrowserApp {
             })
             .cloned()
             .collect();
+        
+        let mut filtered = filtered; // Make mutable for sorting
+        
+        // 4. Sorting
+        if let Some(col) = self.sort_column {
+            match col {
+                SortColumn::Timestamp => {
+                    filtered.par_sort_unstable_by(|a, b| {
+                        let ord = a.timestamp.cmp(&b.timestamp);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+                SortColumn::Type => {
+                     filtered.par_sort_unstable_by(|a, b| {
+                        let ord = a.req_type.cmp(&b.req_type);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+                SortColumn::Server => {
+                     filtered.par_sort_unstable_by(|a, b| {
+                        let ord = a.server.cmp(&b.server);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+                SortColumn::ApIp => {
+                     filtered.par_sort_unstable_by(|a, b| {
+                        let ord = a.ap_ip.cmp(&b.ap_ip);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+                SortColumn::ApName => {
+                     filtered.par_sort_unstable_by(|a, b| {
+                        let ord = a.ap_name.cmp(&b.ap_name);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+                SortColumn::Mac => {
+                     filtered.par_sort_unstable_by(|a, b| {
+                        let ord = a.mac.cmp(&b.mac);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+                SortColumn::User => {
+                     filtered.par_sort_unstable_by(|a, b| {
+                        let ord = a.user.cmp(&b.user);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+                SortColumn::Reason => {
+                     filtered.par_sort_unstable_by(|a, b| {
+                        let r_a = if a.reason.is_empty() { &a.resp_type } else { &a.reason };
+                        let r_b = if b.reason.is_empty() { &b.resp_type } else { &b.reason };
+                        let ord = r_a.cmp(r_b);
+                        if self.sort_descending { ord.reverse() } else { ord }
+                    });
+                }
+            }
+        }
             
         self.filtered_items = Arc::new(filtered);
         self.selected_row = None;
@@ -356,7 +429,7 @@ impl RadiusBrowserApp {
                                  self.layout_version += 1; 
                                  self.search_text.clear();
                                  self.show_errors_only = false; 
-                                 self.filtered_items = self.items.clone();
+                                 self.apply_filter();
                                  self.status = format!("Loaded {} requests in {:?}", count, start.elapsed());
                                  self.selected_row = None;
                             }
@@ -555,6 +628,7 @@ impl RadiusBrowserApp {
 
         let next_search = Arc::new(Mutex::new(None));
         let next_status = Arc::new(Mutex::new(None));
+        let next_sort_col = Arc::new(Mutex::new(None));
         let ws = self.col_widths.clone();
 
         ui.push_id(self.layout_version, |ui| {
@@ -589,14 +663,27 @@ impl RadiusBrowserApp {
                 }
 
                 table.header(22.0, |mut header| {
-                    header.col(|ui| { ui.label(egui::RichText::new("Timestamp").strong()); });
-                    header.col(|ui| { ui.label(egui::RichText::new("Type").strong()); });
-                    header.col(|ui| { ui.label(egui::RichText::new("Server").strong()); });
-                    header.col(|ui| { ui.label(egui::RichText::new("AP IP").strong()); });
-                    header.col(|ui| { ui.label(egui::RichText::new("AP Name").strong()); });
-                    header.col(|ui| { ui.label(egui::RichText::new("MAC").strong()); });
-                    header.col(|ui| { ui.label(egui::RichText::new("User").strong()); });
-                    header.col(|ui| { ui.label(egui::RichText::new("Result/Reason").strong()); });
+                    let header_btn = |ui: &mut egui::Ui, text: &str, col: SortColumn| {
+                        let is_current = self.sort_column == Some(col);
+                        let indicator = if is_current {
+                            if self.sort_descending { " ⬇" } else { " ⬆" }
+                        } else {
+                            ""
+                        };
+                        let label = format!("{}{}", text, indicator);
+                        if ui.button(egui::RichText::new(label).strong()).clicked() {
+                            *next_sort_col.lock().expect("Lock failed") = Some(col);
+                        }
+                    };
+
+                    header.col(|ui| header_btn(ui, "Timestamp", SortColumn::Timestamp));
+                    header.col(|ui| header_btn(ui, "Type", SortColumn::Type));
+                    header.col(|ui| header_btn(ui, "Server", SortColumn::Server));
+                    header.col(|ui| header_btn(ui, "AP IP", SortColumn::ApIp));
+                    header.col(|ui| header_btn(ui, "AP Name", SortColumn::ApName));
+                    header.col(|ui| header_btn(ui, "MAC", SortColumn::Mac));
+                    header.col(|ui| header_btn(ui, "User", SortColumn::User));
+                    header.col(|ui| header_btn(ui, "Result/Reason", SortColumn::Reason));
                 })
                 .body(|body| {
                     let next_sel = Arc::new(Mutex::new(None));
@@ -648,6 +735,20 @@ impl RadiusBrowserApp {
             });
         });
 
+        let sort_update = next_sort_col.lock().expect("Lock failed").take();
+        if let Some(col) = sort_update {
+            if self.sort_column == Some(col) {
+                self.sort_descending = !self.sort_descending;
+            } else {
+                self.sort_column = Some(col);
+                self.sort_descending = false; // Default to Ascending for new column
+                if col == SortColumn::Timestamp {
+                    self.sort_descending = true; // Exception: Timestamp default to Descending (Newest first)
+                }
+            }
+            self.apply_filter();
+        }
+
         let ns_update = next_search.lock().expect("Lock failed").take();
         let status_update = next_status.lock().expect("Lock failed").take();
         if let Some(s) = ns_update {
@@ -678,6 +779,35 @@ impl eframe::App for RadiusBrowserApp {
     }
 }
 
+
+fn get_windows_system_font() -> (String, f32) {
+    use font_kit::source::SystemSource;
+    use font_kit::family_name::FamilyName;
+    
+    let source = SystemSource::new();
+    
+    // Récupération de la police système UI
+    let family = source.select_best_match(
+        &[FamilyName::SansSerif],
+        &font_kit::properties::Properties::new()
+    ).ok();
+    
+    if let Some(handle) = family {
+        if let Ok(font) = handle.load() {
+            // Extraction du nom de famille
+            let family_name = font.family_name();
+            
+            // Taille système Windows standard (9pt = 12px à 96 DPI)
+            // font-kit nous donne la métrique native
+            let size = 12.0;
+            
+            return (family_name, size);
+        }
+    }
+    
+    // Fallback Windows standard
+    ("Segoe UI".to_string(), 12.0)
+}
 fn main() {
     // Configuration de human-panic pour des rapports de crash professionnels
     human_panic::setup_panic!();
@@ -791,10 +921,19 @@ fn main() {
             // Striped Table
             style.visuals.striped = true;
 
-            // Fonts (Attempting a slightly more 'System' look if possible, otherwise default)
-            style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(13.0));
-            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(13.0));
-            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(18.0));
+            // Fonts - Récupération dynamique de la police système Windows
+            let mut fonts = egui::FontDefinitions::default();
+            let (system_font, system_size) = get_windows_system_font();
+
+            fonts.families.insert(
+                egui::FontFamily::Proportional,
+                vec![system_font.clone()]
+            );
+            cc.egui_ctx.set_fonts(fonts);
+
+            style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(system_size));
+            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(system_size));
+            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(system_size * 1.33));
             
             cc.egui_ctx.set_style(style);
 
@@ -983,3 +1122,10 @@ fn map_reason(code: &str) -> String {
          _ => code.to_string(),
     }
 }
+
+
+
+
+
+
+
