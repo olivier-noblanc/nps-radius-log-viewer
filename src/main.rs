@@ -771,14 +771,8 @@ impl RadiusBrowserApp {
                         };
 
                         let params = CellParams { is_selected, item, text_color };
-                        let row_rect = row.response().rect;
 
-                        row.col(|ui| {
-                            if is_selected {
-                                ui.painter().rect_filled(row_rect, 0.0, selection_bg_color);
-                            }
-                            Self::render_table_cell(ui, &item.timestamp, &params)
-                        });
+                        row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
                         row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
                         row.col(|ui| Self::render_table_cell(ui, &item.server, &params));
                         row.col(|ui| Self::render_table_cell(ui, &item.ap_ip, &params));
