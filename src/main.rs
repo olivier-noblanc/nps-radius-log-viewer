@@ -485,13 +485,17 @@ impl RadiusBrowserApp {
 
     fn render_top_panel(&mut self, ctx: &egui::Context) -> bool {
         let mut filter_changed = false;
+        let start = Instant::now();
+        
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            let inner_start = Instant::now();
             ui.add_space(4.0); 
             ui.horizontal(|ui| {
+                let load_start = Instant::now();
                 if ui.button("📂 Open Log File").clicked() {
                     if let Some(path) = FileDialog::new().add_filter("Log", &["log"]).pick_file() {
                         let path_str = path.to_string_lossy().to_string();
-                        let start = Instant::now();
+                        let load_instant = Instant::now();
                         
                         match parse_full_logic(&path_str) {
                             Ok(items) => {
@@ -503,7 +507,7 @@ impl RadiusBrowserApp {
                                  self.search_text.clear();
                                  self.show_errors_only = false; 
                                  self.apply_filter();
-                                 self.status = format!("Loaded {} requests in {:?}", count, start.elapsed());
+                                 self.status = format!("Loaded {} requests in {:?}", count, load_instant.elapsed());
                                  self.selected_row = None;
                             }
                             Err(e) => {
@@ -512,9 +516,13 @@ impl RadiusBrowserApp {
                         }
                     }
                 }
+                if load_start.elapsed().as_millis() > 5 {
+                    self.add_debug_log(format!("⏱️ Load Button: {:?}", load_start.elapsed()));
+                }
 
                 ui.separator();
                 
+                let filter_btn_start = Instant::now();
                 let btn = ui.button(if self.show_errors_only { "⚠️ Show All" } else { "⚠️ Failed Sessions" });
                 if btn.clicked() {
                     self.show_errors_only = !self.show_errors_only;
@@ -523,8 +531,12 @@ impl RadiusBrowserApp {
                 if self.show_errors_only {
                      ui.label(egui::RichText::new("(Showing all traffic for failed users)").color(egui::Color32::RED));
                 }
+                if filter_btn_start.elapsed().as_millis() > 5 {
+                    self.add_debug_log(format!("⏱️ Filter Button: {:?}", filter_btn_start.elapsed()));
+                }
 
                 ui.separator();
+                let search_start = Instant::now();
                 ui.label(egui::RichText::new("🔍 Search:").strong());
                 if ui.text_edit_singleline(&mut self.search_text).changed() {
                     filter_changed = true;
@@ -534,14 +546,21 @@ impl RadiusBrowserApp {
                     self.search_text.clear();
                     filter_changed = true;
                 }
+                if search_start.elapsed().as_millis() > 5 {
+                    self.add_debug_log(format!("⏱️ Search Bar: {:?}", search_start.elapsed()));
+                }
 
                 ui.separator();
+                let copy_start = Instant::now();
                 if ui.add_enabled(self.selected_row.is_some(), egui::Button::new("📋 Copy Row")).clicked() {
                     if let Some(idx) = self.selected_row {
                         if idx < self.filtered_items.len() {
                              ui.ctx().copy_text(self.filtered_items[idx].to_tsv());
                         }
                     }
+                }
+                if copy_start.elapsed().as_millis() > 5 {
+                    self.add_debug_log(format!("⏱️ Copy Button: {:?}", copy_start.elapsed()));
                 }
                 
                 ui.separator();
@@ -550,9 +569,25 @@ impl RadiusBrowserApp {
                 }
             });
             ui.add_space(4.0);
-            ui.label(&self.status);
+            
+            // Truncate status to prevent layout explosion if error is massive
+            let mut status_trunk = self.status.clone();
+            if status_trunk.len() > 500 {
+                status_trunk.truncate(500);
+                status_trunk.push_str("...");
+            }
+            ui.label(status_trunk);
             ui.add_space(4.0);
+            
+            if inner_start.elapsed().as_millis() > 10 {
+                // Not using add_debug_log here to avoid recursion if logging is too slow
+                eprintln!("[DEBUG] Top Panel Inner took {:?}", inner_start.elapsed());
+            }
         });
+
+        if start.elapsed().as_millis() > 10 {
+            self.add_debug_log(format!("⏱️ Total render_top_panel: {:?}", start.elapsed()));
+        }
         filter_changed
     }
 
