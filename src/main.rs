@@ -220,7 +220,7 @@ struct CellParams<'a> {
     text_color: egui::Color32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum SortColumn {
     Timestamp,
     Type,
@@ -232,19 +232,27 @@ enum SortColumn {
     Reason,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 struct RadiusBrowserApp {
+    #[serde(skip)]
     items: Arc<Vec<RadiusRequest>>, 
+    #[serde(skip)]
     filtered_items: Arc<Vec<RadiusRequest>>,
+    #[serde(skip)]
     status: String,
+    #[serde(skip)]
     search_text: String,
+    #[serde(skip)]
     selected_row: Option<usize>,
-    // Store calculated widths: [Time, Type, Server, IP, Name, MAC, User]
-    // Reason is remainder.
+    
     col_widths: Vec<f32>,
+    #[serde(skip)]
     layout_version: usize,
-    show_errors_only: bool, // New Filter State
-    about_window: AboutWindow, // About Window
-    sort_column: Option<SortColumn>, // Sorting State
+    show_errors_only: bool,
+    #[serde(skip)]
+    about_window: AboutWindow,
+    sort_column: Option<SortColumn>,
     sort_descending: bool,
 }
 
@@ -372,42 +380,60 @@ impl RadiusBrowserApp {
         self.selected_row = None;
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn calculate_widths(items: &[RadiusRequest]) -> Vec<f32> {
-        let mut max_widths = [130.0, 80.0, 100.0, 100.0, 120.0, 120.0, 100.0, 200.0]; 
+        // Initial defaults
+        let mut widths = [130.0, 80.0, 100.0, 100.0, 120.0, 120.0, 100.0, 200.0]; 
         
-        // Simple Heuristic due to egui locking changes (text.len() * approx_char_width)
-        let approx_char_width = 7.0;
+        // Font-independent sizing (using constant pixels per character)
+        // User requested not to depend on the current font/size.
+        let char_w = 6.2;
 
-        // Measure Headers first
+        // Measure Headers
         let headers = ["Timestamp", "Type", "Server", "AP IP", "AP Name", "MAC", "User", "Result/Reason"];
         for (i, h) in headers.iter().enumerate() {
-            let w = f32::from(u16::try_from(h.len()).unwrap_or(u16::MAX)) * approx_char_width;
-            if w > max_widths[i] { max_widths[i] = w; }
+            let w = (h.len() as f32) * char_w;
+            if w > widths[i] { widths[i] = w; }
         }
 
         // Measure sample
-        let sample_limit = 5000;
+        let sample_limit = 2000;
+        let mut min_widths = [f32::MAX; 8];
+
         for item in items.iter().take(sample_limit) {
-             let mut measure = |idx: usize, text: &str| {
-                 if !text.is_empty() {
-                     let w = f32::from(u16::try_from(text.len()).unwrap_or(u16::MAX)) * approx_char_width;
-                     if w > max_widths[idx] { max_widths[idx] = w; }
+             let mut process = |idx: usize, text: &str| {
+                 let len = text.len() as f32;
+                 let w = len * char_w;
+                 
+                 // Standard columns: Max logic
+                 if w > widths[idx] { widths[idx] = w; }
+                 
+                 // Specific columns: Track Min length for "shortest value" request
+                 if !text.is_empty() && w < min_widths[idx] {
+                     min_widths[idx] = w;
                  }
              };
 
-             measure(0, &item.timestamp);
-             measure(1, &item.req_type);
-             measure(2, &item.server);
-             measure(3, &item.ap_ip);
-             measure(4, &item.ap_name);
-             measure(5, &item.mac);
-             measure(6, &item.user);
+             process(0, &item.timestamp);
+             process(1, &item.req_type);
+             process(2, &item.server);
+             process(3, &item.ap_ip);
+             process(4, &item.ap_name);
+             process(5, &item.mac);
+             process(6, &item.user);
              let reason = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
-             measure(7, reason);
+             process(7, reason);
         }
 
-        // Add padding + Clamping
-        max_widths.iter().map(|w| (w + 24.0).clamp(60.0, 800.0)).collect()
+        // Apply Min logic for requested columns: Timestamp(0), AP IP(3), AP Name(4)
+        for &i in &[0, 3, 4] {
+            if min_widths[i] < 1_000_000.0 && min_widths[i] > 40.0 {
+                widths[i] = min_widths[i];
+            }
+        }
+
+        // Add small padding + Tight Clamping
+        widths.iter().map(|w| (w + 8.0).clamp(40.0, 800.0)).collect()
     }
 
     fn render_top_panel(&mut self, ctx: &egui::Context) -> bool {
@@ -778,6 +804,10 @@ impl eframe::App for RadiusBrowserApp {
         // Show About window if open
         self.about_window.show(ctx);
     }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "radius_browser_state", self);
+    }
 }
 
 
@@ -973,7 +1003,14 @@ fn main() {
         options,
         Box::new(|cc| {
             configure_styles(&cc.egui_ctx);
-            Ok(Box::new(RadiusBrowserApp::default()))
+            
+            // Load persistent state if available
+            let app = cc.storage.map_or_else(RadiusBrowserApp::default, |storage| {
+                eframe::get_value::<RadiusBrowserApp>(storage, "radius_browser_state")
+                    .unwrap_or_default()
+            });
+            
+            Ok(Box::new(app))
         }),
     ) {
         // CRITICAL FIX: Show a Message Box if the Graphics Engine (WGPU) fails to init

@@ -28,7 +28,7 @@ wgpu = { version = "27.0", default-features = false, features = ["dx12", "vulkan
 [dependencies.eframe]
 version = "0.33"
 default-features = false
-features = ["wgpu", "default_fonts", "wayland"]
+features = ["wgpu", "default_fonts", "wayland", "persistence"]
 
 
 # Optimize for size while keeping debug info for crash reports
