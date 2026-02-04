@@ -304,17 +304,15 @@ impl RadiusBrowserApp {
         let full_msg = format!("[{}] {}", timestamp, msg);
         eprintln!("{}", full_msg);
         self.debug_logs.push(full_msg);
-        if self.debug_logs.len() > 100 {
+        if self.debug_logs.len() > 200 { // Changed from 100 to 200
             self.debug_logs.remove(0);
         }
     }
 
     fn apply_filter(&mut self) {
-        let start = std::time::Instant::now();
+        let _start = std::time::Instant::now();
         let query = self.search_text.trim().to_lowercase();
         let all = self.items.clone();
-        
-        self.add_debug_log(format!("apply_filter started (query: '{}')", query));
         
         // 1. Identify "Failed Sessions" by Acct-Session-Id
         // We collect the Session IDs of all Access-Rejects.
@@ -414,10 +412,6 @@ impl RadiusBrowserApp {
         }
             
         self.filtered_items = Arc::new(filtered);
-        self.selected_row = None;
-        
-        let elapsed = start.elapsed();
-        self.add_debug_log(format!("apply_filter finished: {:?}", elapsed));
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -693,9 +687,9 @@ impl RadiusBrowserApp {
         );
     }
 
-    #[allow(clippy::too_many_lines)]
     fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) -> bool {
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
+        let primary_pressed = ui.input(|i| i.pointer.primary_pressed());
 
         // Shared state for closures that need cross-frame or cross-thread persistence
         let next_sort_col = Arc::new(Mutex::new(None)); 
@@ -803,20 +797,13 @@ impl RadiusBrowserApp {
                             Self::render_table_cell(ui, text, &params);
                         });
 
-                        // Interaction: Whole Row
-                        // Using clicked_by instead of manual press detection to avoid multi-triggering
-                        let row_response = row.response().interact(egui::Sense::click());
+                        // row_response.context_menu(|ui| { ... }) deleted to avoid per-row hover overhead.
                         
-                        if row_response.clicked() {
+                        // Interaction: Immediate response on Mouse Down
+                        let response = row.response().interact(egui::Sense::click());
+                        if response.contains_pointer() && primary_pressed {
                             clicked_row = Some(row_index);
                         }
-
-                        if row_response.secondary_clicked() {
-                             // This handles right-click selection as well
-                             clicked_row = Some(row_index);
-                        }
-
-                        // row_response.context_menu(|ui| { ... }) deleted to avoid per-row hover overhead.
                     });
                 });
             });
@@ -878,9 +865,9 @@ impl RadiusBrowserApp {
                     });
                     egui::ScrollArea::vertical()
                         .stick_to_bottom(true)
-                        .show(ui, |ui| {
-                            for log in &self.debug_logs {
-                                ui.label(egui::RichText::new(log).monospace().size(10.0));
+                        .show_rows(ui, 12.0, self.debug_logs.len(), |ui, row_range| {
+                            for i in row_range {
+                                ui.label(egui::RichText::new(&self.debug_logs[i]).monospace().size(10.0));
                             }
                         });
                 });
@@ -908,16 +895,12 @@ impl eframe::App for RadiusBrowserApp {
             });
         });
 
-        let click_occurred = egui::CentralPanel::default().show(ctx, |ui| {
+        let _click_occurred = egui::CentralPanel::default().show(ctx, |ui| {
             self.render_central_table(ctx, ui, scroll_target)
         }).inner;
 
         self.about_window.show(ctx);
         self.render_debug_window(ctx);
-
-        if click_occurred {
-            self.add_debug_log(format!("Row interaction @ {}", chrono::Local::now().format("%H:%M:%S%.3f")));
-        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
