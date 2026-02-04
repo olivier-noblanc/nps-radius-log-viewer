@@ -725,6 +725,18 @@ impl RadiusBrowserApp {
                             params.text_color = egui::Color32::BLACK;
                         }
 
+                        row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.server, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.ap_ip, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.ap_name, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.mac, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.user, &params));
+                        row.col(|ui| { 
+                            let text = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
+                            Self::render_table_cell(ui, text, &params);
+                        });
+
                         // Single interaction handler for the entire row
                         let row_response = row.response();
                         let nsel = &next_sel;
@@ -745,19 +757,6 @@ impl RadiusBrowserApp {
                                 *status_ref.lock().expect("Lock failed") = Some("Row copied to clipboard".to_string());
                                 ui.close();
                             }
-                        });
-
-
-                        row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.server, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.ap_ip, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.ap_name, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.mac, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.user, &params));
-                        row.col(|ui| { 
-                            let text = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
-                            Self::render_table_cell(ui, text, &params);
                         });
                     });
                     let sel = next_sel.lock().expect("Lock failed").take();
