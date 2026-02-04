@@ -782,36 +782,52 @@ impl eframe::App for RadiusBrowserApp {
 
 
 fn get_windows_system_font() -> (String, f32) {
-    use font_kit::source::SystemSource;
-    use font_kit::family_name::FamilyName;
+    // Note: font-kit peut être lent ou planter dans certains environnements (ex: Hyper-V, serveurs sans polices)
+    // On utilise un fallback immédiat si quoi que ce soit échoue.
     
-    let source = SystemSource::new();
-    
-    // Récupération de la police système UI
-    let family = source.select_best_match(
-        &[FamilyName::SansSerif],
-        &font_kit::properties::Properties::new()
-    ).ok();
-    
-    if let Some(handle) = family {
-        if let Ok(font) = handle.load() {
-            // Extraction du nom de famille
-            let family_name = font.family_name();
-            
-            // Taille système Windows standard (9pt = 12px à 96 DPI)
-            // font-kit nous donne la métrique native
-            let size = 12.0;
-            
-            return (family_name, size);
-        }
+    let result = std::panic::catch_unwind(|| {
+        use font_kit::source::SystemSource;
+        use font_kit::family_name::FamilyName;
+        
+        let source = SystemSource::new();
+        let family = source.select_best_match(
+            &[FamilyName::SansSerif],
+            &font_kit::properties::Properties::new()
+        ).ok()?;
+        
+        let font = family.load().ok()?;
+        Some(font.family_name())
+    });
+
+    match result {
+        Ok(Some(name)) => (name, 12.0),
+        _ => ("Segoe UI".to_string(), 12.0),
     }
-    
-    // Fallback Windows standard
-    ("Segoe UI".to_string(), 12.0)
 }
 fn main() {
-    // Configuration de human-panic pour des rapports de crash professionnels
-    human_panic::setup_panic!();
+    // Configuration d'un gestionnaire de panique avec MessageBox pour les environnements sans console
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = panic_info.location().map(|l| format!("à {}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "lieu inconnu".to_string());
+        let payload = panic_info.payload();
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Une panique inconnue est survenue.".to_string()
+        };
+
+        let fatal_message = format!("Une erreur fatale est survenue :\n\n{}\n\nLieu : {}\n\nL'application va se fermer.", message, location);
+        
+        eprintln!("PANIC: {}", fatal_message);
+
+        // Affichage de la boîte de dialogue
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Crash de l'application")
+            .set_description(fatal_message)
+            .show();
+    }));
     
     // 1. System Theme Support (Dark/Light auto-detect)
     let force_software = std::env::args().any(|x| x == "--software");
