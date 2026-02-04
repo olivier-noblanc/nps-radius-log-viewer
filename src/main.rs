@@ -931,6 +931,7 @@ impl RadiusBrowserApp {
 
 impl eframe::App for RadiusBrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let update_start = Instant::now();
         let now = Instant::now();
         let frame_delta = now.duration_since(self.last_frame_time);
         self.last_frame_time = now;
@@ -951,10 +952,7 @@ impl eframe::App for RadiusBrowserApp {
         let scroll_target = self.handle_keyboard_navigation(ctx);
         let nav_elapsed = nav_start.elapsed();
 
-        if top_elapsed.as_millis() > 10 || nav_elapsed.as_millis() > 10 {
-            self.add_debug_log(format!("Slow update segment: Top: {:?}, Nav: {:?}", top_elapsed, nav_elapsed));
-        }
-
+        let bottom_start = Instant::now();
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
@@ -966,14 +964,26 @@ impl eframe::App for RadiusBrowserApp {
                 });
             });
         });
+        let bottom_elapsed = bottom_start.elapsed();
 
+        let central_start = Instant::now();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_central_table(ctx, ui, scroll_target);
         });
+        let central_elapsed = central_start.elapsed();
 
-        // Show window if open
+        let windows_start = Instant::now();
         self.about_window.show(ctx);
         self.render_debug_window(ctx);
+        let windows_elapsed = windows_start.elapsed();
+
+        let total_elapsed = update_start.elapsed();
+        if total_elapsed.as_millis() > 10 {
+            self.add_debug_log(format!(
+                "⏱️ UPDATE: {:?} [Top: {:?}, Nav: {:?}, Bot: {:?}, Central: {:?}, Windows: {:?}]",
+                total_elapsed, top_elapsed, nav_elapsed, bottom_elapsed, central_elapsed, windows_elapsed
+            ));
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
