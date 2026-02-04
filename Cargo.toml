@@ -22,7 +22,6 @@ rust_xlsxwriter = "0.93" # Excel Export
 anyhow = "1.0"
 crossbeam-channel = "0.5" # For async logic/UI communication
 serde = { version = "1.0", features = ["derive"] }
-human-panic = "2.0" # Professional crash reporting
 wgpu = { version = "27.0", default-features = false, features = ["dx12", "vulkan", "gles", "wgsl"] }
 
 
@@ -56,6 +55,3 @@ style = "warn"
 suspicious = "warn"
 unwrap_used = "warn"
 semicolon_if_nothing_returned = "warn"
-
-
-

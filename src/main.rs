@@ -805,7 +805,7 @@ fn get_windows_system_font() -> (String, f32) {
     }
 }
 fn main() {
-    // Configuration d'un gestionnaire de panique avec MessageBox pour les environnements sans console
+    // Configuration du gestionnaire de panique (MessageBox) pour environnements sans console
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info.location().map(|l| format!("à {}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "lieu inconnu".to_string());
         let payload = panic_info.payload();
@@ -817,7 +817,7 @@ fn main() {
             "Une panique inconnue est survenue.".to_string()
         };
 
-        let fatal_message = format!("Une erreur fatale est survenue :\n\n{}\n\nLieu : {}\n\nL'application va se fermer.", message, location);
+        let fatal_message = format!("Une erreur fatale est survenue :\n\n{message}\n\nLieu : {location}\n\nL'application va se fermer.");
         
         eprintln!("PANIC: {}", fatal_message);
 
