@@ -784,19 +784,17 @@ impl RadiusBrowserApp {
                         });
 
                         // Interaction: Whole Row
-                        // SWITCHED TO PRESS-TO-SELECT for instant feedback
-                        let row_response = row.response();
-                        if row_response.clicked_by(egui::PointerButton::Primary) || row_response.secondary_clicked() {
-                            // Already handled by clicked below or just for safety
-                        }
+                        // Restored interact(click) to ensure row is interactive
+                        let row_response = row.response().interact(egui::Sense::click());
                         
                         // We use ctx.input to avoid borrowing ui while it's in use by the table
+                        // but we check if the row is actually hovered/interacted
                         if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) && row_response.hovered() {
                              clicked_row = Some(row_index);
                         }
                         
                         if row_response.clicked() {
-                            // Keep this for standard click handling if needed
+                            clicked_row = Some(row_index); // Redundant but safe
                         }
                         
                         // Smart Context Menu - Only formats TSV if button is actually clicked
@@ -891,13 +889,24 @@ impl eframe::App for RadiusBrowserApp {
             self.add_debug_log(format!("⚠️ INTER-FRAME DELAY: {:?}", frame_delta));
         }
 
-        self.perf_info = format!("Frame Gap: {:?}", frame_delta);
+        self.perf_info = format!("Gap: {:?} | ", frame_delta);
         
+        // Force continuous repaint during debugging to rule out event loop throttling
+        ctx.request_repaint();
+        
+        let top_start = Instant::now();
         if self.render_top_panel(ctx) {
             self.apply_filter();
         }
+        let top_elapsed = top_start.elapsed();
 
+        let nav_start = Instant::now();
         let scroll_target = self.handle_keyboard_navigation(ctx);
+        let nav_elapsed = nav_start.elapsed();
+
+        if top_elapsed.as_millis() > 10 || nav_elapsed.as_millis() > 10 {
+            self.add_debug_log(format!("Slow update segment: Top: {:?}, Nav: {:?}", top_elapsed, nav_elapsed));
+        }
 
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
