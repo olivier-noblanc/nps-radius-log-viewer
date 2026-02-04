@@ -635,7 +635,9 @@ impl RadiusBrowserApp {
                 egui::RichText::new(text)
                     .color(params.text_color)
                     .size(13.0)
-            ).truncate()
+            )
+            .truncate()
+            .selectable(false)
         );
     }
 
@@ -643,10 +645,16 @@ impl RadiusBrowserApp {
     fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) {
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
-        let next_search = Arc::new(Mutex::new(None));
-        let next_status = Arc::new(Mutex::new(None));
-        let next_sort_col = Arc::new(Mutex::new(None));
+        // Shared state for closures (Arc<Mutex> avoids lifetime issues with egui's nested closures)
+        let next_sort_col = Arc::new(Mutex::new(None)); 
+        let next_sel = Arc::new(Mutex::new(None));
+        let next_status = Arc::new(Mutex::new(None)); 
+        let next_copy = Arc::new(Mutex::new(None)); 
+
         let ws = self.col_widths.clone();
+        let current_sort_col = self.sort_column;
+        let is_descending = self.sort_descending;
+        let selected_idx = self.selected_row;
 
         ui.push_id(self.layout_version, |ui| {
             egui::ScrollArea::horizontal()
@@ -680,16 +688,19 @@ impl RadiusBrowserApp {
                 }
 
                 table.header(22.0, |mut header| {
+                    let sort_ref = next_sort_col.clone();
                     let header_btn = |ui: &mut egui::Ui, text: &str, col: SortColumn| {
-                        let is_current = self.sort_column == Some(col);
+                        let is_current = current_sort_col == Some(col);
                         let indicator = if is_current {
-                            if self.sort_descending { " ⬇" } else { " ⬆" }
+                            if is_descending { " ⬇" } else { " ⬆" }
                         } else {
                             ""
                         };
                         let label = format!("{text}{indicator}");
                         if ui.button(egui::RichText::new(label).strong()).clicked() {
-                            *next_sort_col.lock().expect("Lock failed") = Some(col);
+                            if let Ok(mut guard) = sort_ref.lock() {
+                                *guard = Some(col);
+                            }
                         }
                     };
 
@@ -703,27 +714,32 @@ impl RadiusBrowserApp {
                     header.col(|ui| header_btn(ui, "Result/Reason", SortColumn::Reason));
                 })
                 .body(|body| {
-                    let next_sel = Arc::new(Mutex::new(None));
+                    let sel_ref = next_sel.clone();
+                    let copy_ref = next_copy.clone();
+                    let dark_mode = ctx.style().visuals.dark_mode;
+
                     body.rows(text_height, self.filtered_items.len(), |mut row| {
                         let row_index = row.index();
                         let item = &self.filtered_items[row_index];
-                        let is_selected = self.selected_row == Some(row_index);
+                        let is_selected = selected_idx == Some(row_index);
+                        
                         let text_color = if is_selected {
                             egui::Color32::WHITE
-                        } else if ctx.style().visuals.dark_mode {
+                        } else if dark_mode {
                             egui::Color32::LIGHT_GRAY
                         } else {
                             egui::Color32::BLACK
                         };
-                        let mut params = CellParams {
+
+                        let params = CellParams {
                             is_selected,
                             item,
-                            text_color,
+                            text_color: if item.bg_color.is_some() && !is_selected { 
+                                egui::Color32::BLACK 
+                            } else { 
+                                text_color 
+                            },
                         };
-                        
-                        if item.bg_color.is_some() && !is_selected {
-                            params.text_color = egui::Color32::BLACK;
-                        }
 
                         row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
                         row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
@@ -737,58 +753,62 @@ impl RadiusBrowserApp {
                             Self::render_table_cell(ui, text, &params);
                         });
 
-                        // Single interaction handler for the entire row
-                        let row_response = row.response();
-                        let nsel = &next_sel;
-                        if row_response.clicked() {
-                             *nsel.lock().expect("Lock failed") = Some(row_index);
-                        }
-
-                        // Smart Context Menu attached to the row
-                        // We capture necessary data to calculate the clicked column dynamically
-                        let items_ref = Arc::clone(&self.filtered_items);
-                        let status_ref = next_status.clone();
+                        // Interaction: Whole Row
+                        let row_combined_response = row.response();
                         
-                        row_response.context_menu(move |ui| {
-                            let item = &items_ref[row_index];
+                        // Selection on click
+                        if row_combined_response.clicked() {
+                            if let Ok(mut guard) = sel_ref.lock() {
+                                *guard = Some(row_index);
+                            }
+                            ctx.request_repaint(); // Instant visual feedback (using ctx instead of ui.ctx() to fix E0502)
+                        }
+                        
+                        // Smart Context Menu on the row
+                        let copy_ref_local = copy_ref.clone();
+                        let tsv_content = item.to_tsv();
+                        row_combined_response.context_menu(move |ui| {
                             if ui.button("Copy Entire Row (TSV)").clicked() {
-                                let row_tsv = item.to_tsv();
-                                ui.ctx().copy_text(row_tsv);
-                                *status_ref.lock().expect("Lock failed") = Some("Row copied to clipboard".to_string());
+                                if let Ok(mut guard) = copy_ref_local.lock() {
+                                    *guard = Some(tsv_content);
+                                }
                                 ui.close();
                             }
                         });
                     });
-                    let sel = next_sel.lock().expect("Lock failed").take();
-                    if let Some(idx) = sel {
-                        self.selected_row = Some(idx);
-                    }
                 });
             });
         });
 
-        let sort_update = next_sort_col.lock().expect("Lock failed").take();
-        if let Some(col) = sort_update {
+        // Apply deferred updates (Using .lock().ok() pattern to avoid lifetime issues with temporaries)
+        if let Some(col) = next_sort_col.lock().ok().and_then(|mut g| g.take()) {
             if self.sort_column == Some(col) {
                 self.sort_descending = !self.sort_descending;
             } else {
                 self.sort_column = Some(col);
-                self.sort_descending = false; // Default to Ascending for new column
+                self.sort_descending = false; 
                 if col == SortColumn::Timestamp {
-                    self.sort_descending = true; // Exception: Timestamp default to Descending (Newest first)
+                    self.sort_descending = true; 
                 }
             }
             self.apply_filter();
+            ctx.request_repaint();
         }
 
-        let ns_update = next_search.lock().expect("Lock failed").take();
-        let status_update = next_status.lock().expect("Lock failed").take();
-        if let Some(s) = ns_update {
-            self.search_text = s;
-            self.apply_filter();
+        if let Some(idx) = next_sel.lock().ok().and_then(|mut g| g.take()) {
+            self.selected_row = Some(idx);
+            ctx.request_repaint(); // Redraw immediately to show selection
         }
-        if let Some(msg) = status_update {
+
+        if let Some(tsv) = next_copy.lock().ok().and_then(|mut g| g.take()) {
+            ctx.copy_text(tsv);
+            self.status = "Row copied to clipboard".to_string();
+            ctx.request_repaint();
+        }
+        
+        if let Some(msg) = next_status.lock().ok().and_then(|mut g| g.take()) {
             self.status = msg;
+            ctx.request_repaint();
         }
     }
 }
