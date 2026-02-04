@@ -226,14 +226,12 @@ impl AboutWindow {
     }
 }
 
+// CellParams struct is no longer used for rendering,
+// as styling is now handled directly within the table row creation.
+// CellParams struct is used for rendering table cells with specific styling.
 struct CellParams<'a> {
-    row_index: usize,
     is_selected: bool,
     item: &'a RadiusRequest,
-    // Add Arc reference to allow deferred calculations in context menus
-    items_ref: Arc<Vec<RadiusRequest>>,
-    next_search: &'a Arc<Mutex<Option<String>>>,
-    next_status: &'a Arc<Mutex<Option<String>>>,
     text_color: egui::Color32,
 }
 
@@ -617,22 +615,17 @@ impl RadiusBrowserApp {
     }
 
     
+    // Purely visual cell rendering - no interaction logic here to save performance
     fn render_table_cell(
         ui: &mut egui::Ui,
         text: &str,
-        col_name: &str,
         params: &CellParams,
-    ) -> bool {
-        let mut clicked = false;
+    ) {
         let rect = ui.max_rect();
         if params.is_selected {
             ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 120, 215)); 
         } else if let Some(bg) = params.item.bg_color {
             ui.painter().rect_filled(rect, 0.0, bg);
-        }
-        let response = ui.interact(rect, ui.id().with(params.row_index).with(col_name), egui::Sense::click());
-        if response.clicked() {
-            clicked = true;
         }
 
         // Use a Label with truncation to prevent text overflow into other columns
@@ -647,51 +640,6 @@ impl RadiusBrowserApp {
                 ).truncate());
             });
         });
-
-        // Context menu (calculations deferred until opened)
-        // We capture Arcs and index to avoid per-frame string allocations
-        let items_ref = Arc::clone(&params.items_ref);
-        let row_index = params.row_index;
-        let col_name_owned = col_name.to_lowercase();
-        let ns = params.next_search.clone();
-        let status_ref = params.next_status.clone();
-        
-        response.context_menu(move |ui| {
-            // Get the item and specific text ONLY when menu is shown
-            let item = &items_ref[row_index];
-            let cell_text = match col_name_owned.as_str() {
-                "ts" => &item.timestamp,
-                "type" => &item.req_type,
-                "srv" => &item.server,
-                "ip" => &item.ap_ip,
-                "ap" => &item.ap_name,
-                "mac" => &item.mac,
-                "user" => &item.user,
-                _ => if item.reason.is_empty() { &item.resp_type } else { &item.reason },
-            }.clone();
-
-            ui.add_enabled_ui(true, |ui| {
-                if ui.button(format!("Filter by '{}'", &cell_text)).clicked() {
-                    *ns.lock().expect("Lock failed") = Some(cell_text.clone());
-                    ui.close();
-                }
-            });
-            ui.separator();
-            ui.add_enabled_ui(true, |ui| {
-                if ui.button("Copy Cell Value").clicked() {
-                    ui.ctx().copy_text(cell_text.clone());
-                    *status_ref.lock().expect("Lock failed") = Some(format!("Copied to clipboard: '{}'", &cell_text));
-                    ui.close();
-                }
-                if ui.button("Copy Entire Row").clicked() {
-                    let row_tsv = item.to_tsv();
-                    ui.ctx().copy_text(row_tsv);
-                    *status_ref.lock().expect("Lock failed") = Some("Row copied to clipboard".to_string());
-                    ui.close();
-                }
-            });
-        });
-        clicked
     }
 
     #[allow(clippy::too_many_lines)]
@@ -771,12 +719,8 @@ impl RadiusBrowserApp {
                             egui::Color32::BLACK
                         };
                         let mut params = CellParams {
-                            row_index,
                             is_selected,
                             item,
-                            items_ref: Arc::clone(&self.filtered_items),
-                            next_search: &next_search,
-                            next_status: &next_status,
                             text_color,
                         };
                         
@@ -784,20 +728,75 @@ impl RadiusBrowserApp {
                             params.text_color = egui::Color32::BLACK;
                         }
 
+                        // Single interaction handler for the entire row
+                        let row_response = row.response();
                         let nsel = &next_sel;
+                        if row_response.clicked() {
+                             *nsel.lock().expect("Lock failed") = Some(row_index);
+                        }
 
-                        row.col(|ui| if Self::render_table_cell(ui, &item.timestamp, "ts", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.req_type, "type", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.server, "srv", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_ip, "ip", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.ap_name, "ap", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.mac, "mac", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
-                        row.col(|ui| if Self::render_table_cell(ui, &item.user, "user", &params) { *nsel.lock().expect("Lock failed") = Some(row_index); });
+                        // Smart Context Menu attached to the row
+                        // We capture necessary data to calculate the clicked column dynamically
+                        let items_ref = Arc::clone(&self.filtered_items);
+                        let ns = next_search.clone();
+                        let status_ref = next_status.clone();
+                        
+                        row_response.context_menu(move |ui| {
+                            let item = &items_ref[row_index];
+                            
+                            
+                            ui.menu_button("Copy Specific Value", |ui| {
+                                 if ui.button(format!("Timestamp: {}", &item.timestamp)).clicked() {
+                                    ui.ctx().copy_text(item.timestamp.clone());
+                                    ui.close();
+                                 }
+                                 if ui.button(format!("IP: {}", &item.ap_ip)).clicked() {
+                                    ui.ctx().copy_text(item.ap_ip.clone());
+                                    ui.close();
+                                 }
+                                 if ui.button(format!("User: {}", &item.user)).clicked() {
+                                    ui.ctx().copy_text(item.user.clone());
+                                    ui.close();
+                                 }
+                                 if ui.button(format!("MAC: {}", &item.mac)).clicked() {
+                                    ui.ctx().copy_text(item.mac.clone());
+                                    ui.close();
+                                 }
+                            });
+                            
+                            ui.separator();
+                            
+                            // Quick Actions
+                            if ui.button(format!("Filter by User '{}'", &item.user)).clicked() {
+                                *ns.lock().expect("Lock failed") = Some(item.user.clone());
+                                ui.close();
+                            }
+                             if ui.button(format!("Filter by IP '{}'", &item.ap_ip)).clicked() {
+                                *ns.lock().expect("Lock failed") = Some(item.ap_ip.clone());
+                                ui.close();
+                            }
+                            
+                            ui.separator();
+
+                            if ui.button("Copy Entire Row (TSV)").clicked() {
+                                let row_tsv = item.to_tsv();
+                                ui.ctx().copy_text(row_tsv);
+                                *status_ref.lock().expect("Lock failed") = Some("Row copied to clipboard".to_string());
+                                ui.close();
+                            }
+                        });
+
+
+                        row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.server, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.ap_ip, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.ap_name, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.mac, &params));
+                        row.col(|ui| Self::render_table_cell(ui, &item.user, &params));
                         row.col(|ui| { 
                             let text = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
-                            if Self::render_table_cell(ui, text, "res", &params) {
-                                *nsel.lock().expect("Lock failed") = Some(row_index);
-                            }
+                            Self::render_table_cell(ui, text, &params);
                         });
                     });
                     let sel = next_sel.lock().expect("Lock failed").take();
