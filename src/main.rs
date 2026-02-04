@@ -788,8 +788,6 @@ impl RadiusBrowserApp {
                 })
                 .body(|body| {
                     let dark_mode = ctx.style().visuals.dark_mode;
-                    let copy_ref = next_copy.clone();
-                    let items_for_menu = items_arc.clone();
 
                     body.rows(text_height, items_len, |mut row| {
                         let row_index = row.index();
