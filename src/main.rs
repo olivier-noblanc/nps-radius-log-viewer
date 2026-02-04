@@ -806,12 +806,15 @@ fn get_windows_system_font() -> (String, Option<Vec<u8>>, f32) {
         _ => ("Segoe UI".to_string(), None, 12.0),
     }
 }
-fn main() {
+
+fn setup_panic_hook() {
     // Set up panic handler with MessageBox for console-less environments
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info.location()
-            .map(|l| format!("at {file}:{line}:{col}", file=l.file(), line=l.line(), col=l.column()))
-            .unwrap_or_else(|| "unknown location".to_string());
+            .map_or_else(
+                || "unknown location".to_string(),
+                |l| format!("at {file}:{line}:{col}", file=l.file(), line=l.line(), col=l.column())
+            );
         let payload = panic_info.payload();
         let message = payload.downcast_ref::<&str>()
             .map(|s| (*s).to_string())
@@ -829,6 +832,96 @@ fn main() {
             .set_description(fatal_message)
             .show();
     }));
+}
+
+fn configure_styles(ctx: &egui::Context) {
+    // 2. Retro Windows 2000 Styling
+    let mut style = (*ctx.style()).clone();
+    
+    // --- Metrics (Square & Chunky) ---
+    style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.widgets.open.corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.window_corner_radius = egui::CornerRadius::ZERO;
+    style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
+    
+    // --- Scrollbars (The User wants to SEE them) ---
+    style.spacing.scroll.bar_width = 16.0; // Classic Windows width
+    style.spacing.scroll.handle_min_length = 20.0;
+    style.spacing.scroll.floating = false; // Reserve space!
+    
+    // Track (Background)
+    style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_gray(245); // Very light gray track
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(180)); // Scrollbar border
+    
+    // Handle (The thumb you drag) - Make it much more visible
+    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(170); // Darker gray handle
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_gray(140);  // Even darker when hovered
+    style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(110);   // Darkest when clicked
+    
+    // --- Colors (Classic Gray) ---
+    let classic_gray = egui::Color32::from_rgb(212, 208, 200);
+    let classic_text = egui::Color32::BLACK;
+    let classic_blue = egui::Color32::from_rgb(10, 36, 106);
+    let classic_white = egui::Color32::WHITE;
+
+    // Panel / Window Background
+    style.visuals.panel_fill = classic_gray;
+    style.visuals.window_fill = classic_gray;
+    style.visuals.faint_bg_color = classic_gray;
+    style.visuals.extreme_bg_color = classic_white; // Input fields white
+
+    // Button / Widget Colors
+    style.visuals.widgets.inactive.bg_fill = classic_gray;
+    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, classic_text);
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(128)); // Darker gray border
+    
+    // Hovered
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(224, 224, 224); // Slightly lighter
+    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, classic_text);
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(64));
+    
+    // Active (Pressed)
+    style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(192);
+    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, classic_text);
+    style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, egui::Color32::BLACK);
+
+    // Selection
+    style.visuals.selection.bg_fill = classic_blue;
+    style.visuals.selection.stroke = egui::Stroke::new(1.0, classic_white);
+
+    // Fonts - Dynamic retrieval of Windows system font data
+    let (system_font_name, system_font_data, system_size) = get_windows_system_font();
+    
+    if let Some(font_bytes) = system_font_data {
+        let mut fonts = egui::FontDefinitions::default();
+        
+        // 1. Load the binary data into FontData
+        fonts.font_data.insert(
+            system_font_name.clone(),
+            std::sync::Arc::new(egui::FontData::from_owned(font_bytes)),
+        );
+        
+        // 2. Map the Proportional family to use our new font as the first choice
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.insert(0, system_font_name);
+        }
+        
+        ctx.set_fonts(fonts);
+    }
+    
+    // Apply font size
+    style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(system_size));
+    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(system_size));
+    style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(system_size * 1.33));
+    
+    ctx.set_style(style);
+}
+    
+fn main() {
+    setup_panic_hook();
     
     // 1. System Theme Support (Dark/Light auto-detect)
     let force_software = std::env::args().any(|x| x == "--software");
@@ -879,90 +972,7 @@ fn main() {
         "Radius Log Browser (System Theme)",
         options,
         Box::new(|cc| {
-            // 2. Retro Windows 2000 Styling
-            let mut style = (*cc.egui_ctx.style()).clone();
-            
-            // --- Metrics (Square & Chunky) ---
-            style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::ZERO;
-            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
-            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
-            style.visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
-            style.visuals.widgets.open.corner_radius = egui::CornerRadius::ZERO;
-            style.visuals.window_corner_radius = egui::CornerRadius::ZERO;
-            style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
-            
-            // --- Scrollbars (The User wants to SEE them) ---
-            style.spacing.scroll.bar_width = 16.0; // Classic Windows width
-            style.spacing.scroll.handle_min_length = 20.0;
-            style.spacing.scroll.floating = false; // Reserve space!
-            
-            // Track (Background)
-            style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_gray(245); // Very light gray track
-            style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(180)); // Scrollbar border
-            
-            // Handle (The thumb you drag) - Make it much more visible
-            style.visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(170); // Darker gray handle
-            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_gray(140);  // Even darker when hovered
-            style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(110);   // Darkest when clicked
-            
-            // --- Colors (Classic Gray) ---
-            let classic_gray = egui::Color32::from_rgb(212, 208, 200);
-            let classic_text = egui::Color32::BLACK;
-            let classic_blue = egui::Color32::from_rgb(10, 36, 106);
-            let classic_white = egui::Color32::WHITE;
-
-            // Panel / Window Background
-            style.visuals.panel_fill = classic_gray;
-            style.visuals.window_fill = classic_gray;
-            style.visuals.faint_bg_color = classic_gray;
-            style.visuals.extreme_bg_color = classic_white; // Input fields white
-
-            // Button / Widget Colors
-            style.visuals.widgets.inactive.bg_fill = classic_gray;
-            style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, classic_text);
-            style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(128)); // Darker gray border
-            
-            // Hovered
-            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(224, 224, 224); // Slightly lighter
-            style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, classic_text);
-            style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(64));
-            
-            // Active (Pressed)
-            style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(192);
-            style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, classic_text);
-            style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, egui::Color32::BLACK);
-
-            // Selection
-            style.visuals.selection.bg_fill = classic_blue;
-            style.visuals.selection.stroke = egui::Stroke::new(1.0, classic_white);
-
-            // Fonts - Dynamic retrieval of Windows system font data
-            let (system_font_name, system_font_data, system_size) = get_windows_system_font();
-            
-            if let Some(font_bytes) = system_font_data {
-                let mut fonts = egui::FontDefinitions::default();
-                
-                // 1. Load the binary data into FontData
-                fonts.font_data.insert(
-                    system_font_name.clone(),
-                    egui::FontData::from_owned(font_bytes),
-                );
-                
-                // 2. Map the Proportional family to use our new font as the first choice
-                fonts.families.get_mut(&egui::FontFamily::Proportional)
-                    .unwrap()
-                    .insert(0, system_font_name);
-                
-                cc.egui_ctx.set_fonts(fonts);
-            }
-            
-            // Apply font size
-            style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(system_size));
-            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(system_size));
-            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(system_size * 1.33));
-            
-            cc.egui_ctx.set_style(style);
-
+            configure_styles(&cc.egui_ctx);
             Ok(Box::new(RadiusBrowserApp::default()))
         }),
     ) {
