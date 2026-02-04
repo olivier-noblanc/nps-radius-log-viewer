@@ -614,7 +614,7 @@ impl RadiusBrowserApp {
 
     
     fn render_table_cell(
-        ui: &egui::Ui,
+        ui: &mut egui::Ui,
         text: &str,
         col_name: &str,
         params: CellParams,
@@ -630,13 +630,18 @@ impl RadiusBrowserApp {
         if response.clicked() {
             clicked = true;
         }
-        ui.painter().text(
-            rect.min + egui::vec2(4.0, (rect.height() - 13.0) / 2.0),
-            egui::Align2::LEFT_TOP,
-            text,
-            egui::FontId::proportional(13.0),
-            params.text_color,
-        );
+        // Use a Label with truncation to prevent text overflow into other columns
+        // We use the full cell rect for the label but add small padding
+        let label_rect = rect.shrink2(egui::vec2(4.0, 0.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(
+                    egui::RichText::new(text)
+                        .color(params.text_color)
+                        .size(13.0)
+                ).truncate());
+            });
+        });
         let text_val = text.to_string();
         let row_tsv = params.item.to_tsv();
         let ns = params.next_search.clone();
