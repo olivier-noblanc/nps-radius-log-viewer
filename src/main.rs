@@ -623,6 +623,7 @@ impl RadiusBrowserApp {
         clicked
     }
 
+    #[allow(clippy::too_many_lines)]
     fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) {
         let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
 
@@ -670,7 +671,7 @@ impl RadiusBrowserApp {
                         } else {
                             ""
                         };
-                        let label = format!("{}{}", text, indicator);
+                        let label = format!("{text}{indicator}");
                         if ui.button(egui::RichText::new(label).strong()).clicked() {
                             *next_sort_col.lock().expect("Lock failed") = Some(col);
                         }
@@ -927,7 +928,7 @@ fn main() {
 
             fonts.families.insert(
                 egui::FontFamily::Proportional,
-                vec![system_font.clone()]
+                vec![system_font]
             );
             cc.egui_ctx.set_fonts(fonts);
 
@@ -1122,6 +1123,9 @@ fn map_reason(code: &str) -> String {
          _ => code.to_string(),
     }
 }
+
+
+
 
 
 
