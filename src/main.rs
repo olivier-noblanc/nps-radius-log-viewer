@@ -975,25 +975,13 @@ fn configure_styles(ctx: &egui::Context) {
     style.visuals.window_corner_radius = egui::CornerRadius::ZERO;
     style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
     
-    // --- Scrollbars (The User wants to SEE them) ---
-    style.spacing.scroll.bar_width = 16.0; // Classic Windows width
-    style.spacing.scroll.handle_min_length = 20.0;
-    style.spacing.scroll.floating = false; // Reserve space!
-    
-    // Track (Background)
-    style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_gray(245); // Very light gray track
-    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(180)); // Scrollbar border
-    
-    // Handle (The thumb you drag) - Make it much more visible
-    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(170); // Darker gray handle
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_gray(140);  // Even darker when hovered
-    style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(110);   // Darkest when clicked
-    
     // --- Colors (Classic Gray) ---
     let classic_gray = egui::Color32::from_rgb(212, 208, 200);
     let classic_text = egui::Color32::BLACK;
     let classic_blue = egui::Color32::from_rgb(10, 36, 106);
     let classic_white = egui::Color32::WHITE;
+    let scroll_track = egui::Color32::from_gray(240); // Opaque track
+    let scroll_handle = egui::Color32::from_gray(180); // Opaque handle
 
     // Panel / Window Background
     style.visuals.panel_fill = classic_gray;
@@ -1002,12 +990,15 @@ fn configure_styles(ctx: &egui::Context) {
     style.visuals.extreme_bg_color = classic_white; // Input fields white
 
     // Button / Widget Colors
+    style.visuals.widgets.noninteractive.bg_fill = classic_gray;
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(160));
+    
     style.visuals.widgets.inactive.bg_fill = classic_gray;
     style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, classic_text);
-    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(128)); // Darker gray border
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(128));
     
     // Hovered
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(224, 224, 224); // Slightly lighter
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(224, 224, 224);
     style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, classic_text);
     style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(64));
     
@@ -1019,6 +1010,17 @@ fn configure_styles(ctx: &egui::Context) {
     // Selection
     style.visuals.selection.bg_fill = classic_blue;
     style.visuals.selection.stroke = egui::Stroke::new(1.0, classic_white);
+
+    // --- Scrollbars (Opaque & Fixed Width) ---
+    style.spacing.scroll.bar_width = 17.0; // Exact Win2k width
+    style.spacing.scroll.handle_min_length = 30.0;
+    style.spacing.scroll.floating = false;
+    style.spacing.scroll.bar_inner_margin = 0.0;
+    style.spacing.scroll.bar_outer_margin = 0.0;
+
+    // Scrollbar-specific color overrides (must be after general widgets)
+    style.visuals.widgets.noninteractive.bg_fill = scroll_track;
+    style.visuals.widgets.inactive.bg_fill = scroll_handle;
 
     // Fonts - Dynamic retrieval of Windows system font data
     let (system_font_name, system_font_data, system_size) = get_windows_system_font();
