@@ -900,7 +900,16 @@ impl RadiusBrowserApp {
                     ui.heading("Telemetry");
                     ui.label(&self.perf_info);
                     ui.separator();
-                    ui.heading("Logs");
+                    ui.horizontal(|ui| {
+                        ui.heading("Logs");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("📋 Copy All Logs").clicked() {
+                                let all_logs = self.debug_logs.join("\n");
+                                ui.ctx().copy_text(all_logs);
+                                self.add_debug_log("All logs copied to clipboard".to_string());
+                            }
+                        });
+                    });
                     egui::ScrollArea::vertical()
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
