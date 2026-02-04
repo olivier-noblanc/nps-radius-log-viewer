@@ -781,7 +781,7 @@ impl eframe::App for RadiusBrowserApp {
 }
 
 
-fn get_windows_system_font() -> (String, f32) {
+fn get_windows_system_font() -> (String, Option<Vec<u8>>, f32) {
     // Note: font-kit can be slow or crash in some environments (e.g. Hyper-V, servers without fonts)
     // We use a safe fallback if anything fails.
     
@@ -796,12 +796,14 @@ fn get_windows_system_font() -> (String, f32) {
         ).ok()?;
         
         let font = family.load().ok()?;
-        Some(font.family_name())
+        let name = font.family_name();
+        let data = font.copy_font_data()?.to_vec();
+        Some((name, data))
     });
 
     match result {
-        Ok(Some(name)) => (name, 12.0),
-        _ => ("Segoe UI".to_string(), 12.0),
+        Ok(Some((name, data))) => (name, Some(data), 12.0),
+        _ => ("Segoe UI".to_string(), None, 12.0),
     }
 }
 fn main() {
@@ -934,17 +936,27 @@ fn main() {
             style.visuals.selection.bg_fill = classic_blue;
             style.visuals.selection.stroke = egui::Stroke::new(1.0, classic_white);
 
-            // Striped Table
-            style.visuals.striped = true;
-
-            // Fonts - Dynamic retrieval of Windows system font size
-            let (_, system_size) = get_windows_system_font();
+            // Fonts - Dynamic retrieval of Windows system font data
+            let (system_font_name, system_font_data, system_size) = get_windows_system_font();
             
-            // Note: We avoid manual font registration because egui requires the actual font DATA
-            // to be loaded into FontDefinitions, otherwise it panics with "No font data found".
-            // By NOT setting custom fonts here, we rely on eframe's robust default fonts
-            // while still applying the system-preferred font size.
+            if let Some(font_bytes) = system_font_data {
+                let mut fonts = egui::FontDefinitions::default();
+                
+                // 1. Load the binary data into FontData
+                fonts.font_data.insert(
+                    system_font_name.clone(),
+                    egui::FontData::from_owned(font_bytes),
+                );
+                
+                // 2. Map the Proportional family to use our new font as the first choice
+                fonts.families.get_mut(&egui::FontFamily::Proportional)
+                    .unwrap()
+                    .insert(0, system_font_name);
+                
+                cc.egui_ctx.set_fonts(fonts);
+            }
             
+            // Apply font size
             style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(system_size));
             style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(system_size));
             style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(system_size * 1.33));
