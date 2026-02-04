@@ -23,6 +23,7 @@ anyhow = "1.0"
 crossbeam-channel = "0.5" # For async logic/UI communication
 serde = { version = "1.0", features = ["derive"] }
 wgpu = { version = "27.0", default-features = false, features = ["dx12", "vulkan", "gles", "wgsl"] }
+image = { version = "0.25", features = ["ico", "png"] }
 
 
 [dependencies.eframe]

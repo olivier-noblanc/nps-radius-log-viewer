@@ -112,109 +112,112 @@ impl AboutWindow {
             .resizable(false)
             .collapsible(false)
             .default_width(500.0)
+            .max_height(550.0) // Fits in 800x600 resolution
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(15.0);
-                    ui.heading(egui::RichText::new("RADIUS Log Browser").size(26.0).strong());
-                    ui.label(egui::RichText::new("NPS/IAS Edition").size(15.0).color(egui::Color32::GRAY));
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(13.0).color(egui::Color32::DARK_GRAY));
-                    ui.add_space(20.0);
-                });
-                
-                ui.separator();
-                ui.add_space(15.0);
-                
-                // Author Section
-                ui.group(|ui| {
-                    ui.set_min_width(450.0);
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("👤").size(18.0));
-                        ui.add_space(8.0);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("Developed by").size(11.0).color(egui::Color32::GRAY));
-                            ui.label(egui::RichText::new("Olivier Noblanc").size(15.0).strong());
-                        });
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(10.0);
+                        ui.heading(egui::RichText::new("RADIUS Log Browser").size(24.0).strong());
+                        ui.label(egui::RichText::new("NPS/IAS Edition").size(14.0).color(egui::Color32::GRAY));
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(12.0).color(egui::Color32::DARK_GRAY));
+                        ui.add_space(15.0);
                     });
-                    ui.add_space(8.0);
-                });
-                
-                ui.add_space(12.0);
-                
-                // Project Section
-                ui.group(|ui| {
-                    ui.set_min_width(450.0);
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("🔗").size(18.0));
-                        ui.add_space(8.0);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("GitHub Repository").size(11.0).color(egui::Color32::GRAY));
-                            ui.hyperlink_to(
-                                egui::RichText::new("olivier-noblanc/nps-radius-log-viewer").size(13.0),
-                                "https://github.com/olivier-noblanc/nps-radius-log-viewer"
-                            );
+                    
+                    ui.separator();
+                    ui.add_space(10.0);
+                    
+                    // Author Section
+                    ui.group(|ui| {
+                        ui.set_min_width(450.0);
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("👤").size(16.0));
+                            ui.add_space(5.0);
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("Developed by").size(10.0).color(egui::Color32::GRAY));
+                                ui.label(egui::RichText::new("Olivier Noblanc").size(14.0).strong());
+                            });
                         });
+                        ui.add_space(5.0);
                     });
-                    ui.add_space(8.0);
-                });
-                
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(15.0);
-                
-                // Description
-                ui.label(egui::RichText::new("📝 Description").size(14.0).strong());
-                ui.add_space(8.0);
-                ui.label("High-performance viewer for Microsoft NPS/IAS RADIUS logs.");
-                ui.label("Built with Rust and egui for maximum speed and zero dependencies.");
-                
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(15.0);
-                
-                // System Info Section
-                ui.label(egui::RichText::new("🖥️ System Information").size(14.0).strong());
-                ui.add_space(8.0);
-                ui.group(|ui| {
-                    ui.set_min_width(450.0);
-                    ui.label(egui::RichText::new(format!("Graphics Adapter: {}", self.gpu_info)).size(12.0));
-                });
+                    
+                    ui.add_space(10.0);
+                    
+                    // Project Section
+                    ui.group(|ui| {
+                        ui.set_min_width(450.0);
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("🔗").size(16.0));
+                            ui.add_space(5.0);
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("GitHub Repository").size(10.0).color(egui::Color32::GRAY));
+                                ui.hyperlink_to(
+                                    egui::RichText::new("olivier-noblanc/nps-radius-log-viewer").size(12.0),
+                                    "https://github.com/olivier-noblanc/nps-radius-log-viewer"
+                                );
+                            });
+                        });
+                        ui.add_space(5.0);
+                    });
+                    
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+                    
+                    // Description
+                    ui.label(egui::RichText::new("📝 Description").size(14.0).strong());
+                    ui.add_space(5.0);
+                    ui.label("High-performance viewer for Microsoft NPS/IAS RADIUS logs.");
+                    ui.label("Built with Rust and egui for speed and reliability.");
+                    
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
 
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(15.0);
-                
-                // Licence
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("⚖️ License:").size(13.0).strong());
-                    ui.label(egui::RichText::new("MIT / Apache 2.0").size(13.0));
+                    // System Info Section
+                    ui.label(egui::RichText::new("🖥️ System Information").size(14.0).strong());
+                    ui.add_space(5.0);
+                    ui.group(|ui| {
+                        ui.set_min_width(450.0);
+                        ui.label(egui::RichText::new(format!("Graphics Adapter: {}", self.gpu_info)).size(11.0));
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+                    
+                    // Licence
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("⚖️ License:").size(12.0).strong());
+                        ui.label(egui::RichText::new("MIT / Apache 2.0").size(12.0));
+                    });
+                    
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+                    
+                    // Credits
+                    ui.label(egui::RichText::new("🙏 Acknowledgements").size(12.0).strong());
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Based on the original project by");
+                        ui.hyperlink_to(
+                            "burnacid",
+                            "https://github.com/burnacid/RADIUS-Log-Browser"
+                        );
+                    });
+                    
+                    ui.add_space(15.0);
+                    ui.vertical_centered(|ui| {
+                        if ui.button(egui::RichText::new("Close").size(14.0)).clicked() {
+                            should_close = true;
+                        }
+                    });
+                    ui.add_space(10.0);
                 });
-                
-                ui.add_space(15.0);
-                ui.separator();
-                ui.add_space(15.0);
-                
-                // Credits
-                ui.label(egui::RichText::new("🙏 Acknowledgements").size(13.0).strong());
-                ui.add_space(5.0);
-                ui.horizontal(|ui| {
-                    ui.label("Based on the original project by");
-                    ui.hyperlink_to(
-                        "burnacid",
-                        "https://github.com/burnacid/RADIUS-Log-Browser"
-                    );
-                });
-                
-                ui.add_space(20.0);
-                ui.vertical_centered(|ui| {
-                    if ui.button(egui::RichText::new("Close").size(14.0)).clicked() {
-                        should_close = true;
-                    }
-                });
-                ui.add_space(15.0);
             });
         
         if should_close {
@@ -970,7 +973,17 @@ fn configure_styles(ctx: &egui::Context) {
     
     ctx.set_style(style);
 }
-    
+
+/// Load the application icon from embedded resources
+fn load_icon() -> Option<egui::IconData> {
+    let icon_bytes = include_bytes!("../app.ico");
+    let image = image::load_from_memory_with_format(icon_bytes, image::ImageFormat::Ico).ok()?;
+    let image = image.to_rgba8();
+    let (width, height) = image.dimensions();
+    let rgba = image.into_raw();
+    Some(egui::IconData { rgba, width, height })
+}
+
 fn main() {
     setup_panic_hook();
     
@@ -978,10 +991,14 @@ fn main() {
     let force_software = std::env::args().any(|x| x == "--software");
     let gpu_info_capture = Arc::new(Mutex::new("Unknown".to_string()));
     let gpu_info_clone = gpu_info_capture.clone();
+    
+    // Load icon for the taskbar
+    let app_icon = load_icon();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0]),
+            .with_inner_size([1200.0, 800.0])
+            .with_icon(app_icon.unwrap_or_default()),
         // WGPU configuration to force WARP (software rendering) or maximum compatibility
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             present_mode: eframe::wgpu::PresentMode::AutoNoVsync, // Reduced latency
