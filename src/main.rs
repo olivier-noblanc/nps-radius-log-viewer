@@ -279,6 +279,7 @@ struct RadiusBrowserApp {
     show_debug: bool,
     #[serde(skip)]
     last_frame_time: Instant,
+    continuous_repaint: bool,
 }
 
 impl Default for RadiusBrowserApp {
@@ -300,6 +301,7 @@ impl Default for RadiusBrowserApp {
             debug_logs: Vec::new(),
             show_debug: false,
             last_frame_time: Instant::now(),
+            continuous_repaint: false,
         }
     }
 }
@@ -908,6 +910,10 @@ impl RadiusBrowserApp {
                                 ui.ctx().copy_text(all_logs);
                                 self.add_debug_log("All logs copied to clipboard".to_string());
                             }
+                            if ui.button("🗑️ Clear Logs").clicked() {
+                                self.debug_logs.clear();
+                            }
+                            ui.checkbox(&mut self.continuous_repaint, "🚀 Turbo Mode (60 FPS Force)");
                         });
                     });
                     egui::ScrollArea::vertical()
@@ -929,8 +935,8 @@ impl eframe::App for RadiusBrowserApp {
         let frame_delta = now.duration_since(self.last_frame_time);
         self.last_frame_time = now;
 
-        if frame_delta.as_millis() > 100 {
-            self.add_debug_log(format!("⚠️ INTER-FRAME DELAY: {:?}", frame_delta));
+        if self.continuous_repaint {
+            ctx.request_repaint();
         }
 
         self.perf_info = format!("Gap: {:?} | ", frame_delta);
