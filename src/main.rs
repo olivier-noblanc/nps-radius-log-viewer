@@ -1,20 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use eframe::egui;
-use egui_extras::{Column, TableBuilder};
+use winsafe::prelude::*;
+use winsafe::{gui, co, msg};
 use quick_xml::de::from_str;
 use rayon::prelude::*;
-use rfd::FileDialog;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use std::fs;
-use std::time::Instant;
-use std::collections::HashSet;
-use chrono::NaiveDateTime;
-use rust_xlsxwriter::{Workbook, Format}; // Excel Support
+use std::collections::{HashSet, HashMap};
+use std::thread;
+
+const WM_LOAD_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 1) };
+const WM_LOAD_ERROR: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 2) };
 
 // --- XML Structures ---
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename = "Event")]
 struct Event {
     #[serde(rename = "Timestamp")]
     timestamp: Option<String>,
@@ -23,7 +24,7 @@ struct Event {
     #[serde(rename = "Class")]
     class: Option<String>,
     #[serde(rename = "Acct-Session-Id")]
-    acct_session_id: Option<String>, // Key for correlation
+    acct_session_id: Option<String>,
     #[serde(rename = "Computer-Name")]
     server: Option<String>,
     #[serde(rename = "Client-IP-Address")]
@@ -41,6 +42,7 @@ struct Event {
     #[serde(rename = "Reason-Code")]
     reason_code: Option<String>,
 }
+
 #[derive(Deserialize)]
 struct Root {
     #[serde(rename = "Event", default)]
@@ -50,7 +52,6 @@ struct Root {
 #[derive(Clone, Debug, Default)]
 struct RadiusRequest {
     timestamp: String,
-    parsed_time: Option<NaiveDateTime>, // For sorting/filtering
     req_type: String,
     server: String,
     ap_ip: String,
@@ -60,20 +61,11 @@ struct RadiusRequest {
     resp_type: String,
     reason: String,
     class_id: String,
-    session_id: String, // New field for Acct-Session-Id
-    bg_color: Option<egui::Color32>, 
+    session_id: String,
+    bg_color: Option<(u8, u8, u8)>, // R, G, B
 }
 
 impl RadiusRequest {
-     // "MM/DD/YYYY HH:MM:SS" or with milliseconds -> NaiveDateTime
-    fn parse_timestamp(s: &str) -> Option<NaiveDateTime> {
-        // Try common formats, starting with the one found in user logs (with ms)
-        NaiveDateTime::parse_from_str(s, "%m/%d/%Y %H:%M:%S%.3f").ok()
-            .or_else(|| NaiveDateTime::parse_from_str(s, "%m/%d/%Y %H:%M:%S").ok())
-            .or_else(|| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.3f").ok())
-            .or_else(|| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok())
-    }
-
     fn matches(&self, query: &str) -> bool {
         let q = query.to_lowercase();
         self.user.to_lowercase().contains(&q) 
@@ -93,1079 +85,581 @@ impl RadiusRequest {
     }
 }
 
-#[derive(Default)]
-struct AboutWindow {
-    open: bool,
-    gpu_info: String,
-}
-
-impl AboutWindow {
-    fn show(&mut self, ctx: &egui::Context) {
-        if !self.open {
-            return;
-        }
-        
-        let mut should_close = false;
-        
-        egui::Window::new("About")
-            .open(&mut self.open)
-            .resizable(false)
-            .collapsible(false)
-            .default_width(500.0)
-            .max_height(550.0) // Fits in 800x600 resolution
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(10.0);
-                        ui.heading(egui::RichText::new("RADIUS Log Browser").size(24.0).strong());
-                        ui.label(egui::RichText::new("NPS/IAS Edition").size(14.0).color(egui::Color32::GRAY));
-                        ui.add_space(5.0);
-                        ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(12.0).color(egui::Color32::DARK_GRAY));
-                        ui.add_space(15.0);
-                    });
-                    
-                    ui.separator();
-                    ui.add_space(10.0);
-                    
-                    // Author Section
-                    ui.group(|ui| {
-                        ui.set_min_width(450.0);
-                        ui.add_space(5.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("👤").size(16.0));
-                            ui.add_space(5.0);
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("Developed by").size(10.0).color(egui::Color32::GRAY));
-                                ui.label(egui::RichText::new("Olivier Noblanc").size(14.0).strong());
-                            });
-                        });
-                        ui.add_space(5.0);
-                    });
-                    
-                    ui.add_space(10.0);
-                    
-                    // Project Section
-                    ui.group(|ui| {
-                        ui.set_min_width(450.0);
-                        ui.add_space(5.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("🔗").size(16.0));
-                            ui.add_space(5.0);
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("GitHub Repository").size(10.0).color(egui::Color32::GRAY));
-                                ui.hyperlink_to(
-                                    egui::RichText::new("olivier-noblanc/nps-radius-log-viewer").size(12.0),
-                                    "https://github.com/olivier-noblanc/nps-radius-log-viewer"
-                                );
-                            });
-                        });
-                        ui.add_space(5.0);
-                    });
-                    
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    
-                    // Description
-                    ui.label(egui::RichText::new("📝 Description").size(14.0).strong());
-                    ui.add_space(5.0);
-                    ui.label("High-performance viewer for Microsoft NPS/IAS RADIUS logs.");
-                    ui.label("Built with Rust and egui for speed and reliability.");
-                    
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-
-                    // System Info Section
-                    ui.label(egui::RichText::new("🖥️ System Information").size(14.0).strong());
-                    ui.add_space(5.0);
-                    ui.group(|ui| {
-                        ui.set_min_width(450.0);
-                        ui.label(egui::RichText::new(format!("Graphics Adapter: {}", self.gpu_info)).size(11.0));
-                    });
-
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    
-                    // Licence
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("⚖️ License:").size(12.0).strong());
-                        ui.label(egui::RichText::new("MIT / Apache 2.0").size(12.0));
-                    });
-                    
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    
-                    // Credits
-                    ui.label(egui::RichText::new("🙏 Acknowledgements").size(12.0).strong());
-                    ui.add_space(5.0);
-                    ui.horizontal(|ui| {
-                        ui.label("Based on the original project by");
-                        ui.hyperlink_to(
-                            "burnacid",
-                            "https://github.com/burnacid/RADIUS-Log-Browser"
-                        );
-                    });
-                    
-                    ui.add_space(15.0);
-                    ui.vertical_centered(|ui| {
-                        if ui.button(egui::RichText::new("Close").size(14.0)).clicked() {
-                            should_close = true;
-                        }
-                    });
-                    ui.add_space(10.0);
-                });
-            });
-        
-        if should_close {
-            self.open = false;
-        }
-    }
-}
-
-// CellParams struct is no longer used for rendering,
-// as styling is now handled directly within the table row creation.
-// CellParams struct is used for rendering table cells with specific styling.
-struct CellParams<'a> {
-    is_selected: bool,
-    item: &'a RadiusRequest,
-    text_color: egui::Color32,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SortColumn {
-    Timestamp,
-    Type,
-    Server,
-    ApIp,
-    ApName,
-    Mac,
-    User,
-    Reason,
+    Timestamp, Type, Server, ApIp, ApName, Mac, User, Reason
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-struct RadiusBrowserApp {
-    #[serde(skip)]
-    items: Arc<Vec<RadiusRequest>>, 
-    #[serde(skip)]
-    filtered_items: Arc<Vec<RadiusRequest>>,
-    #[serde(skip)]
-    status: String,
-    #[serde(skip)]
-    search_text: String,
-    #[serde(skip)]
-    selected_row: Option<usize>,
+// --- UI Application ---
+
+struct MyWindow {
+    wnd:          gui::WindowMain,
+    lst_logs:     gui::ListView,
+    txt_search:   gui::Edit,
+    btn_open:     gui::Button,
+    btn_rejects:  gui::Button,
+    btn_copy:     gui::Button,
+    lbl_status:   gui::Label,
     
-    col_widths: Vec<f32>,
-    #[serde(skip)]
-    layout_version: usize,
-    show_errors_only: bool,
-    #[serde(skip)]
-    about_window: AboutWindow,
-    sort_column: Option<SortColumn>,
-    sort_descending: bool,
-    #[serde(skip)]
-    gpu_info: String,
-    #[serde(skip)]
-    debug_logs: Vec<String>,
-    #[serde(skip)]
-    show_debug: bool,
+    all_items:    Arc<Mutex<Vec<RadiusRequest>>>,
+    raw_count:    Arc<Mutex<usize>>,
+    filtered_ids: Arc<Mutex<Vec<usize>>>,
+    show_errors:  Arc<Mutex<bool>>,
+    sort_col:     Arc<Mutex<SortColumn>>,
+    sort_desc:    Arc<Mutex<bool>>,
 }
 
-impl Default for RadiusBrowserApp {
-    fn default() -> Self {
-        Self {
-            items: Arc::new(Vec::new()),
-            filtered_items: Arc::new(Vec::new()),
-            status: "Ready. Click 'Open Log File' to load.".to_owned(),
-            search_text: String::new(),
-            selected_row: None,
-            col_widths: vec![130.0, 110.0, 110.0, 100.0, 150.0, 130.0, 150.0, 300.0],
-            layout_version: 0,
-            show_errors_only: false,
-            about_window: AboutWindow::default(),
-            sort_column: Some(SortColumn::Timestamp),
-            sort_descending: true, // Default: Newest first
-            gpu_info: "Unknown / Detecting...".to_string(),
-            debug_logs: Vec::new(),
-            show_debug: false,
-        }
-    }
-}
+impl MyWindow {
+    pub fn new() -> Self {
+        let wnd = gui::WindowMain::new(
+            gui::WindowMainOpts {
+                title: "RADIUS Log Browser - WinSafe Edition",
+                class_icon: gui::Icon::Id(1),
+                size: (1200, 800),
+                style: co::WS::OVERLAPPEDWINDOW,
+                ..Default::default()
+            },
+        );
 
-impl RadiusBrowserApp {
-    fn add_debug_log(&mut self, msg: String) {
-        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-        let full_msg = format!("[{}] {}", timestamp, msg);
-        eprintln!("{}", full_msg);
-        self.debug_logs.push(full_msg);
-        if self.debug_logs.len() > 200 { // Changed from 100 to 200
-            self.debug_logs.remove(0);
-        }
-    }
+        let btn_open = gui::Button::new(
+            &wnd,
+            gui::ButtonOpts {
+                text: "📂 Ouvrir Log",
+                position: (10, 10),
+                width: 110,
+                height: 30,
+                ..Default::default()
+            },
+        );
 
-    fn apply_filter(&mut self) {
-        let _start = std::time::Instant::now();
-        let query = self.search_text.trim().to_lowercase();
-        let all = self.items.clone();
-        
-        // 1. Identify "Failed Sessions" by Acct-Session-Id
-        // We collect the Session IDs of all Access-Rejects.
-        let mut failed_session_ids: HashSet<String> = HashSet::new();
+        let btn_rejects = gui::Button::new(
+            &wnd,
+            gui::ButtonOpts {
+                text: "⚠️ Sessions échouées",
+                position: (130, 10),
+                width: 150,
+                height: 30,
+                ..Default::default()
+            },
+        );
 
-        if self.show_errors_only {
-            for item in all.iter() {
-                if item.resp_type == "Access-Reject" && !item.session_id.is_empty() {
-                     failed_session_ids.insert(item.session_id.clone());
-                }
-            }
-        }
+        let txt_search = gui::Edit::new(
+            &wnd,
+            gui::EditOpts {
+                position: (290, 13),
+                width: 300,
+                ..Default::default()
+            },
+        );
 
-        let filtered: Vec<RadiusRequest> = all.iter()
-            .filter(|item| {
-                // 2. Exact Session Filter
-                if self.show_errors_only {
-                     // Must belong to a failed session ID
-                     if item.session_id.is_empty() || !failed_session_ids.contains(&item.session_id) {
-                         return false;
-                     }
-                    
-                    // REFINEMENT: Hide "Success" rows even for failed sessions to avoid noise?
-                    // The user said "show me the exchange", so we WANT to see Requests and Challenges.
-                    // But we likely don't want to see "Access-Accept" if by some miracle it happened (unlikely).
-                    // We definitely don't want to see "Accounting-Response".
-                    if item.resp_type == "Access-Accept" || item.resp_type == "Accounting-Response" {
-                        return false;
-                    }
-                }
-                
-                // 3. Text Search
-                if query.is_empty() {
-                    return true;
-                }
-                item.matches(&query)
-            })
-            .cloned()
-            .collect();
-        
-        let mut filtered = filtered; // Make mutable for sorting
-        
-        // 4. Sorting
-        if let Some(col) = self.sort_column {
-            match col {
-                SortColumn::Timestamp => {
-                    filtered.par_sort_unstable_by(|a, b| {
-                        let ord = a.timestamp.cmp(&b.timestamp);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-                SortColumn::Type => {
-                     filtered.par_sort_unstable_by(|a, b| {
-                        let ord = a.req_type.cmp(&b.req_type);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-                SortColumn::Server => {
-                     filtered.par_sort_unstable_by(|a, b| {
-                        let ord = a.server.cmp(&b.server);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-                SortColumn::ApIp => {
-                     filtered.par_sort_unstable_by(|a, b| {
-                        let ord = a.ap_ip.cmp(&b.ap_ip);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-                SortColumn::ApName => {
-                     filtered.par_sort_unstable_by(|a, b| {
-                        let ord = a.ap_name.cmp(&b.ap_name);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-                SortColumn::Mac => {
-                     filtered.par_sort_unstable_by(|a, b| {
-                        let ord = a.mac.cmp(&b.mac);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-                SortColumn::User => {
-                     filtered.par_sort_unstable_by(|a, b| {
-                        let ord = a.user.cmp(&b.user);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-                SortColumn::Reason => {
-                     filtered.par_sort_unstable_by(|a, b| {
-                        let r_a = if a.reason.is_empty() { &a.resp_type } else { &a.reason };
-                        let r_b = if b.reason.is_empty() { &b.resp_type } else { &b.reason };
-                        let ord = r_a.cmp(r_b);
-                        if self.sort_descending { ord.reverse() } else { ord }
-                    });
-                }
-            }
-        }
-            
-        self.filtered_items = Arc::new(filtered);
-    }
+        let btn_copy = gui::Button::new(
+            &wnd,
+            gui::ButtonOpts {
+                text: "📋 Copier Ligne",
+                position: (600, 10),
+                width: 110,
+                height: 30,
+                ..Default::default()
+            },
+        );
 
-    #[allow(clippy::cast_precision_loss)]
-    fn calculate_widths(items: &[RadiusRequest]) -> Vec<f32> {
-        // Initial defaults
-        let mut widths = [130.0, 80.0, 100.0, 100.0, 120.0, 120.0, 100.0, 200.0]; 
-        
-        // Font-independent sizing (using constant pixels per character)
-        // User requested not to depend on the current font/size.
-        let char_w = 6.2;
+        let lst_logs = gui::ListView::new(
+            &wnd,
+            gui::ListViewOpts {
+                position: (10, 50),
+                size: (1180, 710),
+                control_style: co::LVS::REPORT | co::LVS::SHOWSELALWAYS | co::LVS::OWNERDATA,
+                ..Default::default()
+            },
+        );
 
-        // Measure Headers
-        let headers = ["Timestamp", "Type", "Server", "AP IP", "AP Name", "MAC", "User", "Result/Reason"];
-        for (i, h) in headers.iter().enumerate() {
-            let w = (h.len() as f32) * char_w;
-            if w > widths[i] { widths[i] = w; }
-        }
+        let lbl_status = gui::Label::new(
+            &wnd,
+            gui::LabelOpts {
+                text: "Prêt. Ouvrez un fichier log.",
+                position: (10, 765),
+                ..Default::default()
+            },
+        );
 
-        // Measure sample
-        let sample_limit = 2000;
-        let mut min_widths = [f32::MAX; 8];
-
-        for item in items.iter().take(sample_limit) {
-             let mut process = |idx: usize, text: &str| {
-                 let len = text.len() as f32;
-                 let w = len * char_w;
-                 
-                 // Standard columns: Max logic
-                 if w > widths[idx] { widths[idx] = w; }
-                 
-                 // Specific columns: Track Min length for "shortest value" request
-                 if !text.is_empty() && w < min_widths[idx] {
-                     min_widths[idx] = w;
-                 }
-             };
-
-             process(0, &item.timestamp);
-             process(1, &item.req_type);
-             process(2, &item.server);
-             process(3, &item.ap_ip);
-             process(4, &item.ap_name);
-             process(5, &item.mac);
-             process(6, &item.user);
-             let reason = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
-             process(7, reason);
-        }
-
-        // Apply Min logic for requested columns: Timestamp(0), AP IP(3), AP Name(4)
-        for &i in &[0, 3, 4] {
-            if min_widths[i] < 1_000_000.0 && min_widths[i] > 40.0 {
-                widths[i] = min_widths[i];
-            }
-        }
-
-        // Add small padding + Tight Clamping
-        widths.iter().map(|w| (w + 8.0).clamp(40.0, 800.0)).collect()
-    }
-
-    fn render_top_panel(&mut self, ctx: &egui::Context) -> bool {
-        let mut filter_changed = false;
-        let start = Instant::now();
-        
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            let _inner_start = Instant::now();
-            ui.add_space(4.0); 
-            ui.horizontal(|ui| {
-                let load_start = Instant::now();
-                if ui.button("📂 Open Log File").clicked() {
-                    if let Some(path) = FileDialog::new().add_filter("Log", &["log"]).pick_file() {
-                        let path_str = path.to_string_lossy().to_string();
-                        let load_instant = Instant::now();
-                        
-                        match parse_full_logic(&path_str) {
-                            Ok(items) => {
-                                 let count = items.len();
-                                 let new_widths = Self::calculate_widths(&items); 
-                                 self.items = Arc::new(items);
-                                 self.col_widths = new_widths; 
-                                 self.layout_version += 1; 
-                                 self.search_text.clear();
-                                 self.show_errors_only = false; 
-                                 self.apply_filter();
-                                 self.status = format!("Loaded {} requests in {:?}", count, load_instant.elapsed());
-                                 self.selected_row = None;
-                            }
-                            Err(e) => {
-                                self.status = format!("Error: {e}");
-                            }
-                        }
-                    }
-                }
-                if load_start.elapsed().as_millis() > 5 {
-                    self.add_debug_log(format!("⏱️ Load Button: {:?}", load_start.elapsed()));
-                }
-
-                ui.separator();
-                
-                let filter_btn_start = Instant::now();
-                let btn = ui.button(if self.show_errors_only { "⚠️ Show All" } else { "⚠️ Failed Sessions" });
-                if btn.clicked() {
-                    self.show_errors_only = !self.show_errors_only;
-                    filter_changed = true;
-                }
-                if self.show_errors_only {
-                     ui.label(egui::RichText::new("(Showing all traffic for failed users)").color(egui::Color32::RED));
-                }
-                if filter_btn_start.elapsed().as_millis() > 5 {
-                    self.add_debug_log(format!("⏱️ Filter Button: {:?}", filter_btn_start.elapsed()));
-                }
-
-                ui.separator();
-                let search_start = Instant::now();
-                ui.label(egui::RichText::new("🔍 Search:").strong());
-                if ui.text_edit_singleline(&mut self.search_text).changed() {
-                    filter_changed = true;
-                }
-                
-                if !self.search_text.is_empty() && ui.button("❌ Clear").clicked() {
-                    self.search_text.clear();
-                    filter_changed = true;
-                }
-                if search_start.elapsed().as_millis() > 5 {
-                    self.add_debug_log(format!("⏱️ Search Bar: {:?}", search_start.elapsed()));
-                }
-
-                ui.separator();
-                let copy_start = Instant::now();
-                if ui.add_enabled(self.selected_row.is_some(), egui::Button::new("📋 Copy Row")).clicked() {
-                    if let Some(idx) = self.selected_row {
-                        if idx < self.filtered_items.len() {
-                             ui.ctx().copy_text(self.filtered_items[idx].to_tsv());
-                        }
-                    }
-                }
-                if copy_start.elapsed().as_millis() > 5 {
-                    self.add_debug_log(format!("⏱️ Copy Button: {:?}", copy_start.elapsed()));
-                }
-                
-                ui.separator();
-                if ui.button("ℹ️ About").clicked() {
-                    self.about_window.open = true;
-                }
-            });
-            ui.add_space(4.0);
-            
-            // Truncate status to prevent layout explosion if error is massive
-            let mut status_trunk = self.status.clone();
-            if status_trunk.len() > 500 {
-                status_trunk.truncate(500);
-                status_trunk.push_str("...");
-            }
-            ui.label(status_trunk);
-            ui.add_space(4.0);
-        });
-
-        if start.elapsed().as_millis() > 50 {
-            self.add_debug_log(format!("⏱️ render_top_panel SLOW: {:?}", start.elapsed()));
-        }
-        filter_changed
-    }
-
-    fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) -> Option<usize> {
-        if ctx.wants_keyboard_input() {
-            return None;
-        }
-
-        let total = self.filtered_items.len();
-        if total == 0 {
-            return None;
-        }
-
-        let current = self.selected_row.unwrap_or(0);
-        let mut next = current;
-        
-        let changed = if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && current < total - 1 {
-            next = current + 1;
-            true
-        } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && current > 0 {
-            next = current - 1;
-            true
-        } else if ctx.input(|i| i.key_pressed(egui::Key::PageDown)) {
-            next = (current + 20).min(total - 1);
-            true
-        } else if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
-            next = current.saturating_sub(20);
-            true
-        } else if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
-            next = 0;
-            true
-        } else if ctx.input(|i| i.key_pressed(egui::Key::End)) && total > 0 {
-            next = total - 1;
-            true
-        } else {
-            false
+        let new_self = Self {
+            wnd,
+            lst_logs,
+            txt_search,
+            btn_open,
+            btn_rejects,
+            btn_copy,
+            lbl_status,
+            all_items:    Arc::new(Mutex::new(Vec::new())),
+            raw_count:    Arc::new(Mutex::new(0)),
+            filtered_ids: Arc::new(Mutex::new(Vec::new())),
+            show_errors: Arc::new(Mutex::new(false)),
+            sort_col: Arc::new(Mutex::new(SortColumn::Timestamp)),
+            sort_desc: Arc::new(Mutex::new(true)),
         };
 
-        if changed {
-            next = next.min(total.saturating_sub(1));
-            self.selected_row = Some(next);
-            Some(next)
-        } else {
-            None
-        }
+        new_self.on_init();
+        new_self.on_events();
+        new_self
     }
 
-    fn trigger_excel_export(&self, ui: &mut egui::Ui, next_status: &Arc<Mutex<Option<String>>>) {
-        if ui.button("📊 Export to Excel").clicked() {
-            if let Some(path) = rfd::FileDialog::new().add_filter("Excel", &["xlsx"]).save_file() {
-                 let items = self.filtered_items.clone();
-                 let path_clone = path;
-                 let status_ref = next_status.clone();
-                 
-                 std::thread::spawn(move || {
-                     let mut workbook = Workbook::new();
-                     let worksheet = workbook.add_worksheet();
-                     let bold = Format::new().set_bold();
-                     let headers = ["Timestamp", "Type", "Server", "AP IP", "AP Name", "MAC", "User", "Result/Reason"];
-                     for (col, header) in headers.iter().enumerate() {
-                         let _ = worksheet.write_with_format(0, u16::try_from(col).unwrap_or(u16::MAX), *header, &bold);
-                     }
-                     for (row_idx, item) in items.iter().enumerate() {
-                         let r = u32::try_from(row_idx + 1).unwrap_or(u32::MAX);
-                         let _ = worksheet.write(r, 0, &item.timestamp);
-                         let _ = worksheet.write(r, 1, &item.req_type);
-                         let _ = worksheet.write(r, 2, &item.server);
-                         let _ = worksheet.write(r, 3, &item.ap_ip);
-                         let _ = worksheet.write(r, 4, &item.ap_name);
-                         let _ = worksheet.write(r, 5, &item.mac);
-                         let _ = worksheet.write(r, 6, &item.user);
-                         
-                         let res_text = if item.reason.is_empty() { 
-                             item.resp_type.clone() 
-                         } else { 
-                             format!("{} ({})", item.resp_type, item.reason) 
-                         };
-                         let _ = worksheet.write(r, 7, &res_text);
-                     }
-                     let _ = worksheet.autofit();
-                     if let Err(e) = workbook.save(&path_clone) {
-                         *status_ref.lock().expect("Lock failed") = Some(format!("Export failed: {e}"));
-                     } else {
-                         *status_ref.lock().expect("Lock failed") = Some("Export successful!".to_string());
-                     }
-                 });
-            }
-        }
-    }
-
-    
-    // Purely visual cell rendering - no interaction logic here to save performance
-    fn render_table_cell(
-        ui: &mut egui::Ui,
-        text: &str,
-        params: &CellParams,
-    ) {
-        let rect = ui.max_rect();
-        if params.is_selected {
-            ui.painter().rect_filled(rect, 0.0, ui.visuals().selection.bg_fill); 
-        } else if let Some(bg) = params.item.bg_color {
-            ui.painter().rect_filled(rect, 0.0, bg);
-        }
-
-        // Efficient text rendering without nested Ui/Layout overhead
-        // We use the ui directly provided by row.col() which is already clipped and positioned
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(text)
-                    .color(params.text_color)
-                    .size(13.0)
-            )
-            .truncate()
-            .selectable(false)
-        );
-    }
-
-    fn render_central_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, scroll_target: Option<usize>) -> bool {
-        let text_height = egui::TextStyle::Body.resolve(ui.style()).size + 6.0; 
-        let primary_pressed = ui.input(|i| i.pointer.primary_pressed());
-
-        // Shared state for closures that need cross-frame or cross-thread persistence
-        let next_sort_col = Arc::new(Mutex::new(None)); 
-        let next_status = Arc::new(Mutex::new(None)); 
-        let next_copy = Arc::new(Mutex::new(None)); 
-
-        // Local state for immediate detection within this frame
-        let mut clicked_row = None;
-
-        let ws = self.col_widths.clone();
-        let current_sort_col = self.sort_column;
-        let is_descending = self.sort_descending;
-        let selected_idx = self.selected_row;
+    fn on_init(&self) {
+        let lst = self.lst_logs.clone();
+        self.wnd.on().wm_create(move |_| {
+            let cols = lst.cols();
+            cols.add("Timestamp", 150)?;
+            cols.add("Type", 120)?;
+            cols.add("Serveur", 120)?;
+            cols.add("AP IP", 110)?;
+            cols.add("Nom AP", 150)?;
+            cols.add("MAC", 130)?;
+            cols.add("Utilisateur", 150)?;
+            cols.add("Résultat/Raison", 350)?;
+            lst.set_extended_style(true, co::LVS_EX::FULLROWSELECT | co::LVS_EX::GRIDLINES | co::LVS_EX::DOUBLEBUFFER);
+            Ok(0)
+        });
         
-        // Capture items to avoid reaching into 'self' repeatedly
-        let items_arc = self.filtered_items.clone();
-        let items_len = items_arc.len();
+        let lbl = self.lbl_status.clone();
+        let all_it = self.all_items.clone();
+        let filt_id = self.filtered_ids.clone();
+        let raw_count = self.raw_count.clone();
+        let wnd = self.wnd.clone();
+        let lst = self.lst_logs.clone();
 
-        ui.push_id(self.layout_version, |ui| {
-            egui::ScrollArea::horizontal()
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                .show(ui, |ui| {
-                if ctx.input(|i| i.key_down(egui::Key::ArrowRight)) {
-                    ui.scroll_with_delta(egui::vec2(-50.0, 0.0)); 
-                }
-                if ctx.input(|i| i.key_down(egui::Key::ArrowLeft)) {
-                    ui.scroll_with_delta(egui::vec2(50.0, 0.0));
-                }
-                
-                self.trigger_excel_export(ui, &next_status);
-
-                let mut table = TableBuilder::new(ui)
-                    .striped(true)
-                    .resizable(true)
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::initial(ws[0]).resizable(true)) 
-                    .column(Column::initial(ws[1]).resizable(true)) 
-                    .column(Column::initial(ws[2]).resizable(true)) 
-                    .column(Column::initial(ws[3]).resizable(true)) 
-                    .column(Column::initial(ws[4]).resizable(true)) 
-                    .column(Column::initial(ws[5]).resizable(true)) 
-                    .column(Column::initial(ws[6]).resizable(true)) 
-                    .column(Column::initial(ws[7]).resizable(true)); 
-
-                if let Some(target) = scroll_target {
-                    table = table.scroll_to_row(target, Some(egui::Align::Center));
-                }
-
-                table.header(22.0, |mut header| {
-                    let sort_ref = next_sort_col.clone();
-                    let header_btn = |ui: &mut egui::Ui, text: &str, col: SortColumn| {
-                        let is_current = current_sort_col == Some(col);
-                        let indicator = if is_current {
-                            if is_descending { " ⬇" } else { " ⬆" }
-                        } else {
-                            ""
-                        };
-                        let label = format!("{text}{indicator}");
-                        if ui.button(egui::RichText::new(label).strong()).clicked() {
-                            if let Ok(mut guard) = sort_ref.lock() {
-                                *guard = Some(col);
-                            }
-                        }
-                    };
-
-                    header.col(|ui| header_btn(ui, "Timestamp", SortColumn::Timestamp));
-                    header.col(|ui| header_btn(ui, "Type", SortColumn::Type));
-                    header.col(|ui| header_btn(ui, "Server", SortColumn::Server));
-                    header.col(|ui| header_btn(ui, "AP IP", SortColumn::ApIp));
-                    header.col(|ui| header_btn(ui, "AP Name", SortColumn::ApName));
-                    header.col(|ui| header_btn(ui, "MAC", SortColumn::Mac));
-                    header.col(|ui| header_btn(ui, "User", SortColumn::User));
-                    header.col(|ui| header_btn(ui, "Result/Reason", SortColumn::Reason));
-                })
-                .body(|body| {
-                    let dark_mode = ctx.style().visuals.dark_mode;
-
-                    body.rows(text_height, items_len, |mut row| {
-                        let row_index = row.index();
-                        let item = &items_arc[row_index];
-                        let is_selected = selected_idx == Some(row_index);
-
-                        let text_color = if is_selected {
-                            egui::Color32::WHITE
-                        } else if item.bg_color.is_some() {
-                             egui::Color32::BLACK
-                        } else if dark_mode {
-                            egui::Color32::LIGHT_GRAY
-                        } else {
-                            egui::Color32::BLACK
-                        };
-
-                        let params = CellParams { is_selected, item, text_color };
-
-                        row.col(|ui| Self::render_table_cell(ui, &item.timestamp, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.req_type, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.server, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.ap_ip, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.ap_name, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.mac, &params));
-                        row.col(|ui| Self::render_table_cell(ui, &item.user, &params));
-                        row.col(|ui| { 
-                            let text = if item.reason.is_empty() { &item.resp_type } else { &item.reason };
-                            Self::render_table_cell(ui, text, &params);
-                        });
-
-                        // row_response.context_menu(|ui| { ... }) deleted to avoid per-row hover overhead.
-                        
-                        // Interaction: Immediate response on Mouse Down
-                        let response = row.response().interact(egui::Sense::click());
-                        if response.contains_pointer() && primary_pressed {
-                            clicked_row = Some(row_index);
-                        }
-                    });
-                });
-            });
+        // --- CUSTOM MESSAGES ---
+        wnd.on().wm(WM_LOAD_DONE, {
+            let lst = lst.clone();
+            let lbl = lbl.clone();
+            let all_it = all_it.clone();
+            let raw_c = raw_count.clone();
+            let filt_id = filt_id.clone();
+            move |_| {
+                let count = filt_id.lock().unwrap().len();
+                let total = all_it.lock().unwrap().len();
+                let raw = *raw_c.lock().unwrap();
+                lst.items().set_count(count as _, None).unwrap();
+                lbl.hwnd().SetWindowText(&format!("{} événements décodés en {} sessions ({} affichées).", raw, total, count)).unwrap();
+                Ok(0)
+            }
         });
 
-        // Apply immediate updates detected during the frame
-        if let Some(idx) = clicked_row {
-            self.selected_row = Some(idx);
-            ctx.request_repaint();
-        }
-
-        // Apply deferred updates
-        if let Some(col) = next_sort_col.lock().ok().and_then(|mut g| g.take()) {
-            if self.sort_column == Some(col) {
-                self.sort_descending = !self.sort_descending;
-            } else {
-                self.sort_column = Some(col);
-                self.sort_descending = false; 
-                if col == SortColumn::Timestamp {
-                    self.sort_descending = true; 
-                }
+        wnd.on().wm(WM_LOAD_ERROR, {
+            let lbl = lbl.clone();
+            move |_| {
+                lbl.hwnd().SetWindowText("Erreur lors du chargement.").unwrap();
+                Ok(0)
             }
-            self.apply_filter();
-            ctx.request_repaint();
-        }
+        });
 
-        if let Some(tsv) = next_copy.lock().ok().and_then(|mut g| g.take()) {
-            ctx.copy_text(tsv);
-            self.status = "Row copied to clipboard".to_string();
-            ctx.request_repaint();
-        }
-        
-        clicked_row.is_some()
+        self.wnd.on().wm_size({
+            let lst_logs = self.lst_logs.clone();
+            let lbl_status = self.lbl_status.clone();
+            move |p| {
+                if p.request != co::SIZE_R::MINIMIZED {
+                    lst_logs.hwnd().SetWindowPos(
+                        winsafe::HwndPlace::Place(co::HWND_PLACE::TOP),
+                        winsafe::POINT { x: 10, y: 50 },
+                        winsafe::SIZE { cx: p.client_area.cx - 20, cy: p.client_area.cy - 100 },
+                        co::SWP::NOZORDER,
+                    ).unwrap();
+                    
+                    lbl_status.hwnd().SetWindowPos(
+                        winsafe::HwndPlace::Place(co::HWND_PLACE::TOP),
+                        winsafe::POINT { x: 10, y: p.client_area.cy - 30 },
+                        winsafe::SIZE { cx: p.client_area.cx - 20, cy: 25 },
+                        co::SWP::NOZORDER,
+                    ).unwrap();
+                }
+                Ok(())
+            }
+        });
     }
 
-    fn render_debug_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_debug;
-        egui::Window::new("🧰 Performance & Debug Logs")
-            .open(&mut open)
-            .default_size([600.0, 400.0])
-            .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("Renderer: {}", self.gpu_info)).strong());
-                    });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.heading("Logs");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("📋 Copy All Logs").clicked() {
-                                let all_logs = self.debug_logs.join("\n");
-                                ui.ctx().copy_text(all_logs);
-                                self.add_debug_log("All logs copied to clipboard".to_string());
-                            }
-                            if ui.button("🗑️ Clear Logs").clicked() {
-                                self.debug_logs.clear();
-                            }
-                        });
-                    });
-                    egui::ScrollArea::vertical()
-                        .stick_to_bottom(true)
-                        .show_rows(ui, 12.0, self.debug_logs.len(), |ui, row_range| {
-                            for i in row_range {
-                                ui.label(egui::RichText::new(&self.debug_logs[i]).monospace().size(10.0));
-                            }
-                        });
-                });
-            });
-        self.show_debug = open;
-    }
-}
+    fn on_events(&self) {
+        let wnd = self.wnd.clone();
+        let lst = self.lst_logs.clone();
+        let txt = self.txt_search.clone();
+        let lbl = self.lbl_status.clone();
+        let all_it = self.all_items.clone();
+        let filt_id = self.filtered_ids.clone();
+        let raw_count = self.raw_count.clone();
+        let show_err = self.show_errors.clone();
+        let sort_c = self.sort_col.clone();
+        let sort_d = self.sort_desc.clone();
 
-impl eframe::App for RadiusBrowserApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if self.render_top_panel(ctx) {
-            self.apply_filter();
-        }
+        // --- BUTTON: OPEN ---
+        let wnd_c = wnd.clone();
+        let lst_c = lst.clone();
+        let lbl_c = lbl.clone();
+        let all_it_c = all_it.clone();
+        let filt_id_c = filt_id.clone();
+        let raw_count_c = raw_count.clone();
+        let show_err_c = show_err.clone();
+        let sort_c_c = sort_c.clone();
+        let sort_d_c = sort_d.clone();
+        let txt_c = txt.clone();
 
-        let scroll_target = self.handle_keyboard_navigation(ctx);
+        self.btn_open.on().bn_clicked(move || {
+            let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
+                &co::CLSID::FileOpenDialog,
+                None::<&winsafe::IUnknown>,
+                co::CLSCTX::INPROC_SERVER,
+            )?;
+            
+            file_dialog.SetFileTypes(&[("Log files", "*.log"), ("All files", "*.*")])?;
+            
+            if file_dialog.Show(&wnd_c.hwnd())? {
+                let result = file_dialog.GetResult()?;
+                let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
+                
+                lbl_c.hwnd().SetWindowText("Chargement en cours...")?;
+                
+                let query = txt_c.text().unwrap_or_default();
+                let show_err_val = *show_err_c.lock().unwrap();
+                let sort_c_val = *sort_c_c.lock().unwrap();
+                let sort_d_val = *sort_d_c.lock().unwrap();
 
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.status);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("🐞 Debug").clicked() {
-                        self.show_debug = !self.show_debug;
+                let all_it_bg = all_it_c.clone();
+                let raw_c_bg = raw_count_c.clone();
+                let filt_id_bg = filt_id_c.clone();
+                let show_err_bg = show_err_c.clone();
+
+                let hwnd_raw = wnd_c.hwnd().ptr() as usize;
+
+                thread::spawn(move || {
+                    let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                    match parse_full_logic(&path) {
+                        Ok((items, raw_total)) => {
+                            let mut all_guard = all_it_bg.lock().unwrap();
+                            *all_guard = items;
+                            drop(all_guard);
+                            
+                            *raw_c_bg.lock().unwrap() = raw_total;
+
+                            apply_filter_logic(
+                                &all_it_bg, 
+                                &filt_id_bg, 
+                                &query, 
+                                show_err_val,
+                                sort_c_val,
+                                sort_d_val
+                            );
+                            
+                            unsafe {
+                                hwnd_bg.PostMessage(msg::WndMsg {
+                                    msg_id: WM_LOAD_DONE,
+                                    wparam: 0,
+                                    lparam: 0,
+                                }).unwrap();
+                            }
+                        }
+                        Err(e) => {
+                            let _err_msg = e.to_string();
+                            unsafe {
+                                hwnd_bg.PostMessage(msg::WndMsg {
+                                    msg_id: WM_LOAD_ERROR,
+                                    wparam: 0,
+                                    lparam: 0,
+                                }).unwrap();
+                            }
+                        }
                     }
                 });
-            });
+            }
+            Ok(())
         });
 
-        let _click_occurred = egui::CentralPanel::default().show(ctx, |ui| {
-            self.render_central_table(ctx, ui, scroll_target)
-        }).inner;
+        // --- SEARCH INPUT ---
+        let lst_c = lst.clone();
+        let lbl_c = lbl.clone();
+        let all_it_c = all_it.clone();
+        let filt_id_c = filt_id.clone();
+        let txt_c = txt.clone();
+        let show_err_c = show_err.clone();
+        let sort_c_c = sort_c.clone();
+        let sort_d_c = sort_d.clone();
 
-        self.about_window.show(ctx);
-        self.render_debug_window(ctx);
+        self.txt_search.on().en_change(move || {
+            apply_filter_logic(
+                &all_it_c, 
+                &filt_id_c, 
+                &txt_c.text().unwrap_or_default(), 
+                *show_err_c.lock().unwrap(),
+                *sort_c_c.lock().unwrap(),
+                *sort_d_c.lock().unwrap()
+            );
+            let count = filt_id_c.lock().unwrap().len();
+            lst_c.items().set_count(count as _, None)?;
+            lbl_c.hwnd().SetWindowText(&format!("Affichage : {} événements.", count))?;
+            Ok(())
+        });
+
+        // --- BUTTON: REJECTS ---
+        let btn_rejects_c = self.btn_rejects.clone();
+        let lst_c = lst.clone();
+        let txt_c = txt.clone();
+        let all_it_c = all_it.clone();
+        let filt_id_c = filt_id.clone();
+        let show_err_c = show_err.clone();
+        let sort_c_c = sort_c.clone();
+        let sort_d_c = sort_d.clone();
+
+        self.btn_rejects.on().bn_clicked(move || {
+            let mut guard = show_err_c.lock().unwrap();
+            *guard = !*guard;
+            let is_on = *guard;
+            btn_rejects_c.hwnd().SetWindowText(if is_on { "⚠️ Tout afficher" } else { "⚠️ Sessions échouées" })?;
+            drop(guard);
+
+            apply_filter_logic(
+                &all_it_c, 
+                &filt_id_c, 
+                &txt_c.text().unwrap_or_default(), 
+                is_on,
+                *sort_c_c.lock().unwrap(),
+                *sort_d_c.lock().unwrap()
+            );
+            lst_c.items().set_count(filt_id_c.lock().unwrap().len() as _, None)?;
+            Ok(())
+        });
+
+        // --- LIST VIEW: VIRTUAL DATA ---
+        let all_it_c = all_it.clone();
+        let filt_id_c = filt_id.clone();
+        self.lst_logs.on().lvn_get_disp_info(move |p| {
+            let items = all_it_c.lock().unwrap();
+            let ids = filt_id_c.lock().unwrap();
+            if let Some(&idx) = ids.get(p.item.iItem as usize) {
+                let item = &items[idx];
+                let val = match p.item.iSubItem {
+                    0 => &item.timestamp,
+                    1 => &item.req_type,
+                    2 => &item.server,
+                    3 => &item.ap_ip,
+                    4 => &item.ap_name,
+                    5 => &item.mac,
+                    6 => &item.user,
+                    7 => if item.reason.is_empty() { &item.resp_type } else { &item.reason },
+                    _ => "",
+                };
+                if p.item.mask.has(co::LVIF::TEXT) {
+                    let (ptr, len) = p.item.raw_pszText();
+                    if !ptr.is_null() && len > 0 {
+                        let wide = val.encode_utf16().collect::<Vec<_>>();
+                        let copy_len = wide.len().min(len as usize - 1);
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, copy_len);
+                            std::ptr::write(ptr.add(copy_len), 0);
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
+        // --- LIST VIEW: CUSTOM DRAW (Colors) ---
+        let all_it_c = all_it.clone();
+        let filt_id_c = filt_id.clone();
+        lst.on().nm_custom_draw(move |p| {
+            if p.mcd.dwDrawStage == co::CDDS::PREPAINT {
+                return Ok(co::CDRF::NOTIFYITEMDRAW);
+            } else if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT {
+                let items = all_it_c.lock().unwrap();
+                let ids = filt_id_c.lock().unwrap();
+                if let Some(&idx) = ids.get(p.mcd.dwItemSpec as usize) {
+                    if let Some((r, g, b)) = items[idx].bg_color {
+                        p.clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
+                    }
+                }
+            }
+            Ok(co::CDRF::DODEFAULT)
+        });
+
+        // --- LIST VIEW: SORTING ---
+        let lst_c = lst.clone();
+        let all_it_c = all_it.clone();
+        let filt_id_c = filt_id.clone();
+        let txt_c = txt.clone();
+        let show_err_c = show_err.clone();
+        let sort_c_c = sort_c.clone();
+        let sort_d_c = sort_d.clone();
+
+        lst.on().lvn_column_click(move |p| {
+            let col = match p.iSubItem {
+                0 => SortColumn::Timestamp,
+                1 => SortColumn::Type,
+                2 => SortColumn::Server,
+                3 => SortColumn::ApIp,
+                4 => SortColumn::ApName,
+                5 => SortColumn::Mac,
+                6 => SortColumn::User,
+                7 => SortColumn::Reason,
+                _ => return Ok(()),
+            };
+
+            let mut sc = sort_c_c.lock().unwrap();
+            let mut sd = sort_d_c.lock().unwrap();
+            if *sc == col {
+                *sd = !*sd;
+            } else {
+                *sc = col;
+                *sd = col == SortColumn::Timestamp;
+            }
+            let desc = *sd;
+            drop(sc);
+            drop(sd);
+
+            apply_filter_logic(&all_it_c, &filt_id_c, &txt_c.text().unwrap_or_default(), *show_err_c.lock().unwrap(), col, desc);
+            lst_c.items().set_count(filt_id_c.lock().unwrap().len() as _, None)?;
+            // Scroll to top by ensuring index 0 is visible
+            lst_c.items().get(0).ensure_visible()?;
+            Ok(())
+        });
+
+        // --- BUTTON: COPY ---
+        let lst_c = lst.clone();
+        let all_it_c = all_it.clone();
+        let filt_id_c = filt_id.clone();
+        self.btn_copy.on().bn_clicked(move || {
+            if let Some(iitem) = lst_c.items().iter_selected().next() {
+                let items = all_it_c.lock().unwrap();
+                let ids = filt_id_c.lock().unwrap();
+                if let Some(&idx) = ids.get(iitem.index() as usize) {
+                    let tsv = items[idx].to_tsv();
+                    let hwnd = winsafe::HWND::GetDesktopWindow();
+                    let hclip = hwnd.OpenClipboard()?;
+                    hclip.EmptyClipboard()?;
+                    
+                    let bytes = tsv.as_bytes(); // SetClipboardData expects bytes
+                    hclip.SetClipboardData(co::CF::TEXT, bytes)?;
+                }
+            }
+            Ok(())
+        });
     }
 
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, "radius_browser_state", self);
+    pub fn run(&self) -> winsafe::AnyResult<i32> {
+        self.wnd.run_main(None)
     }
 }
 
+// --- LOGIC FUNCTIONS ---
 
-fn get_windows_system_font() -> (String, Option<Vec<u8>>, f32) {
-    // Note: font-kit can be slow or crash in some environments (e.g. Hyper-V, servers without fonts)
-    // We use a safe fallback if anything fails.
+fn apply_filter_logic(
+    all_items: &Arc<Mutex<Vec<RadiusRequest>>>,
+    filtered_ids: &Arc<Mutex<Vec<usize>>>,
+    query: &str,
+    show_errors_only: bool,
+    sort_col: SortColumn,
+    sort_descending: bool,
+) {
+    let items = all_items.lock().unwrap();
+    let q = query.trim().to_lowercase();
     
-    let result = std::panic::catch_unwind(|| {
-        use font_kit::source::SystemSource;
-        use font_kit::family_name::FamilyName;
-        
-        let source = SystemSource::new();
-        let family = source.select_best_match(
-            &[FamilyName::SansSerif],
-            &font_kit::properties::Properties::new()
-        ).ok()?;
-        
-        let font = family.load().ok()?;
-        let name = font.family_name();
-        let data = font.copy_font_data()?.to_vec();
-        Some((name, data))
+    let mut failed_session_ids = HashSet::new();
+    if show_errors_only {
+        for item in items.iter() {
+            if item.resp_type == "Access-Reject" && !item.session_id.is_empty() {
+                failed_session_ids.insert(item.session_id.clone());
+            }
+        }
+    }
+
+    let mut ids: Vec<usize> = (0..items.len())
+        .filter(|&i| {
+            let item = &items[i];
+            if show_errors_only {
+                if item.session_id.is_empty() || !failed_session_ids.contains(&item.session_id) {
+                    return false;
+                }
+                if item.resp_type == "Access-Accept" || item.resp_type == "Accounting-Response" {
+                    return false;
+                }
+            }
+            if q.is_empty() { return true; }
+            item.matches(&q)
+        })
+        .collect();
+
+    // Sorting
+    ids.par_sort_unstable_by(|&a_idx, &b_idx| {
+        let a = &items[a_idx];
+        let b = &items[b_idx];
+        let ord = match sort_col {
+            SortColumn::Timestamp => a.timestamp.cmp(&b.timestamp),
+            SortColumn::Type => a.req_type.cmp(&b.req_type),
+            SortColumn::Server => a.server.cmp(&b.server),
+            SortColumn::ApIp => a.ap_ip.cmp(&b.ap_ip),
+            SortColumn::ApName => a.ap_name.cmp(&b.ap_name),
+            SortColumn::Mac => a.mac.cmp(&b.mac),
+            SortColumn::User => a.user.cmp(&b.user),
+            SortColumn::Reason => {
+                let r_a = if a.reason.is_empty() { &a.resp_type } else { &a.reason };
+                let r_b = if b.reason.is_empty() { &b.resp_type } else { &b.reason };
+                r_a.cmp(r_b)
+            }
+        };
+        if sort_descending { ord.reverse() } else { ord }
     });
 
-    match result {
-        Ok(Some((name, data))) => (name, Some(data), 12.0),
-        _ => ("Segoe UI".to_string(), None, 12.0),
-    }
+    let mut filt_guard = filtered_ids.lock().unwrap();
+    *filt_guard = ids;
 }
 
-fn setup_panic_hook() {
-    // Set up panic handler with MessageBox for console-less environments
-    std::panic::set_hook(Box::new(|panic_info| {
-        let location = panic_info.location()
-            .map_or_else(
-                || "unknown location".to_string(),
-                |l| format!("at {file}:{line}:{col}", file=l.file(), line=l.line(), col=l.column())
-            );
-        let payload = panic_info.payload();
-        let message = payload.downcast_ref::<&str>()
-            .map(|s| (*s).to_string())
-            .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "An unknown panic occurred.".to_string());
-
-        let fatal_message = format!("A fatal error occurred:\n\n{message}\n\nLocation: {location}\n\nThe application will close.");
-        
-        eprintln!("PANIC: {fatal_message}");
-
-        // Display MessageDialog
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("Application Crash")
-            .set_description(fatal_message)
-            .show();
-    }));
-}
-
-fn configure_styles(ctx: &egui::Context) {
-    // 2. Retro Windows 2000 Styling
-    let mut style = (*ctx.style()).clone();
-    
-    // --- Metrics (Square & Chunky) ---
-    style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::ZERO;
-    style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
-    style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
-    style.visuals.widgets.active.corner_radius = egui::CornerRadius::ZERO;
-    style.visuals.widgets.open.corner_radius = egui::CornerRadius::ZERO;
-    style.visuals.window_corner_radius = egui::CornerRadius::ZERO;
-    style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
-    
-    // --- Colors (Classic Gray) ---
-    let classic_gray = egui::Color32::from_rgb(212, 208, 200);
-    let classic_text = egui::Color32::BLACK;
-    let classic_blue = egui::Color32::from_rgb(10, 36, 106);
-    let classic_white = egui::Color32::WHITE;
-    let scroll_track = egui::Color32::from_gray(240); // Opaque track
-    let scroll_handle = egui::Color32::from_gray(180); // Opaque handle
-
-    // Panel / Window Background
-    style.visuals.panel_fill = classic_gray;
-    style.visuals.window_fill = classic_gray;
-    style.visuals.faint_bg_color = classic_gray;
-    style.visuals.extreme_bg_color = classic_white; // Input fields white
-
-    // Button / Widget Colors
-    style.visuals.widgets.noninteractive.bg_fill = classic_gray;
-    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(160));
-    
-    style.visuals.widgets.inactive.bg_fill = classic_gray;
-    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, classic_text);
-    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(128));
-    
-    // Hovered
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(224, 224, 224);
-    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, classic_text);
-    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(64));
-    
-    // Active (Pressed)
-    style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(192);
-    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, classic_text);
-    style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, egui::Color32::BLACK);
-
-    // Selection
-    style.visuals.selection.bg_fill = classic_blue;
-    style.visuals.selection.stroke = egui::Stroke::new(1.0, classic_white);
-
-    // --- Scrollbars (Opaque & Fixed Width) ---
-    style.spacing.scroll.bar_width = 17.0; // Exact Win2k width
-    style.spacing.scroll.handle_min_length = 30.0;
-    style.spacing.scroll.floating = false;
-    style.spacing.scroll.bar_inner_margin = 0.0;
-    style.spacing.scroll.bar_outer_margin = 0.0;
-
-    // Scrollbar-specific color overrides (must be after general widgets)
-    style.visuals.widgets.noninteractive.bg_fill = scroll_track;
-    style.visuals.widgets.inactive.bg_fill = scroll_handle;
-
-    // Fonts - Dynamic retrieval of Windows system font data
-    let (system_font_name, system_font_data, system_size) = get_windows_system_font();
-    
-    if let Some(font_bytes) = system_font_data {
-        let mut fonts = egui::FontDefinitions::default();
-        
-        // 1. Load the binary data into FontData
-        fonts.font_data.insert(
-            system_font_name.clone(),
-            std::sync::Arc::new(egui::FontData::from_owned(font_bytes)),
-        );
-        
-        // 2. Map the Proportional family to use our new font as the first choice
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.insert(0, system_font_name);
-        }
-        
-        ctx.set_fonts(fonts);
-    }
-    
-    // Apply font size
-    style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(system_size));
-    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(system_size));
-    style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(system_size * 1.33));
-    
-    ctx.set_style(style);
-}
-
-/// Load the application icon from embedded resources
-fn load_icon() -> Option<egui::IconData> {
-    let icon_bytes = include_bytes!("../app.ico");
-    let image = image::load_from_memory_with_format(icon_bytes, image::ImageFormat::Ico).ok()?;
-    let image = image.to_rgba8();
-    let (width, height) = image.dimensions();
-    let rgba = image.into_raw();
-    Some(egui::IconData { rgba, width, height })
-}
-
-fn main() {
-    setup_panic_hook();
-    
-    let force_software = std::env::args().any(|x| x == "--software");
-    let gpu_info_capture = Arc::new(Mutex::new("Detecting...".to_string()));
-    let gpu_info_wgpu = gpu_info_capture.clone();
-    let gpu_info_clone = gpu_info_capture.clone();
-    let app_icon = load_icon();
-
-    let options = eframe::NativeOptions {
-        renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_icon(app_icon.unwrap_or_default()),
-        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
-            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
-                eframe::egui_wgpu::WgpuSetupCreateNew {
-                    instance_descriptor: eframe::wgpu::InstanceDescriptor {
-                        backends: eframe::wgpu::Backends::all(),
-                        ..Default::default()
-                    },
-                    native_adapter_selector: Some(std::sync::Arc::new(move |adapters, _surface| {
-                       let selected = if force_software {
-                           adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::Cpu 
-                               || a.get_info().name.contains("Basic Render Driver")
-                               || a.get_info().name.contains("llvmpipe"))
-                               .or_else(|| adapters.first())
-                       } else {
-                           adapters.iter()
-                               .find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::DiscreteGpu)
-                               .or_else(|| adapters.iter().find(|a| a.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu))
-                               .or_else(|| adapters.first())
-                       };
-                       
-                       let adapter = selected.cloned().ok_or_else(|| "No adapter found".to_owned())?;
-                       if let Ok(mut info) = gpu_info_clone.lock() {
-                           let i = adapter.get_info();
-                           *info = format!("{} ({:?} / {:?})", i.name, i.device_type, i.backend);
-                       }
-                       Ok(adapter)
-                    })),
-                    ..Default::default()
-                }
-            ),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    
-    if let Err(e) = eframe::run_native(
-        "Radius Log Browser (WGPU Mode)",
-        options,
-        Box::new(move |cc| {
-            configure_styles(&cc.egui_ctx);
-            let mut app = cc.storage.map_or_else(RadiusBrowserApp::default, |storage| {
-                eframe::get_value::<RadiusBrowserApp>(storage, "radius_browser_state")
-                    .unwrap_or_default()
-            });
-
-            if let Ok(info) = gpu_info_wgpu.lock() {
-                app.gpu_info.clone_from(&info);
-                app.about_window.gpu_info.clone_from(&info);
-            }
-            Ok(Box::new(app))
-        }),
-    ) {
-        eprintln!("Fatal Graphics Error: {e}");
-        rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("Fatal Graphics Error")
-            .set_description(format!("Failed to initialize graphics engine.\n\nError: {e}"))
-            .show();
-        std::process::exit(1);
-    }
-}
-
-fn parse_full_logic(path: &str) -> std::io::Result<Vec<RadiusRequest>> {
+fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
     let content = fs::read_to_string(path)?;
-    let wrapped_content = format!("<events>{content}</events>");
-    
+    // Wrap to make it a valid XML if it's just a list of fragments
+    let wrapped = if content.trim().starts_with("<events>") {
+        content
+    } else {
+        format!("<events>{}</events>", content)
+    };
 
-    let root: Root = from_str(&wrapped_content).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let mut events = root.events;
-    events.par_sort_unstable_by(|a, b| a.class.cmp(&b.class));
+    let root: Root = from_str(&wrapped)?;
+    let events = root.events;
+    let raw_event_count = events.len();
     
-    let requests: Vec<RadiusRequest> = events
-        .chunk_by(|a, b| a.class == b.class) 
-        .map(process_group)
+    if events.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+
+    // Grouping events by Class or Session ID
+    // If both are missing, we don't group (each event stays individual)
+    let mut groups: Vec<Vec<Event>> = Vec::new();
+    let mut class_map: HashMap<String, usize> = HashMap::new(); // maps class/session_id to index in groups
+
+    for ev in events {
+        let key = ev.class.as_deref()
+            .or(ev.acct_session_id.as_deref())
+            .filter(|&s| !s.is_empty());
+        
+        if let Some(k) = key {
+            if let Some(&idx) = class_map.get(k) {
+                groups[idx].push(ev);
+            } else {
+                class_map.insert(k.to_string(), groups.len());
+                groups.push(vec![ev]);
+            }
+        } else {
+            // No grouping key, add as standalone
+            groups.push(vec![ev]);
+        }
+    }
+
+    let mut requests: Vec<RadiusRequest> = groups.into_par_iter()
+        .map(|g| process_group(&g))
         .collect();
         
-    let mut final_list = requests;
-    final_list.par_sort_unstable_by(|a, b| a.timestamp.cmp(&b.timestamp));
-    Ok(final_list)
+    requests.par_sort_unstable_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    Ok((requests, raw_event_count))
 }
 
 fn process_group(group: &[Event]) -> RadiusRequest {
     let mut req = RadiusRequest::default();
-    
     for event in group {
         let p_type = event.packet_type.as_deref().unwrap_or("");
         if p_type == "1" || p_type == "4" {
-            if let Some(val) = &event.timestamp { 
-                req.timestamp.clone_from(val);
-                req.parsed_time = RadiusRequest::parse_timestamp(val);
-            }
+            if let Some(val) = &event.timestamp { req.timestamp.clone_from(val); }
             if let Some(val) = &event.acct_session_id { req.session_id.clone_from(val); }
             if let Some(val) = &event.server { req.server.clone_from(val); }
             if let Some(val) = &event.ap_ip { req.ap_ip.clone_from(val); }
@@ -1176,22 +670,16 @@ fn process_group(group: &[Event]) -> RadiusRequest {
             req.req_type = map_packet_type(p_type);
             if let Some(user) = &event.sam_account { req.user.clone_from(user); } 
             else if let Some(user) = &event.user_name { req.user.clone_from(user); } 
-            else { req.user = "- UNKNOWN -".to_string(); }
+            else { req.user = "- INCONNU -".to_string(); }
         } else {
             req.resp_type = map_packet_type(p_type);
             req.reason = map_reason(event.reason_code.as_deref().unwrap_or("0"));
             match p_type {
-                "2" => req.bg_color = Some(egui::Color32::from_rgb(188, 255, 188)), // Light Green
-                "3" => req.bg_color = Some(egui::Color32::from_rgb(255, 188, 188)), // Light Red
+                "2" => req.bg_color = Some((188, 255, 188)),
+                "3" => req.bg_color = Some((255, 188, 188)),
                 _ => {},
             }
         }
-    }
-    // Adjust colors for Dark Mode (if needed, but simple RGB works okay usually)
-    // Ideally we'd map these to Theme colors, but let's stick to these for now.
-
-    if req.class_id.is_empty() && !group.is_empty() {
-         if let Some(c) = &group[0].class { req.class_id.clone_from(c); }
     }
     req
 }
@@ -1204,117 +692,24 @@ fn map_packet_type(code: &str) -> String {
         "4" => "Accounting-Request".to_string(),
         "5" => "Accounting-Response".to_string(),
         "11" => "Access-Challenge".to_string(),
-        "12" => "Status-Server".to_string(),
-        "13" => "Status-Client".to_string(),
-        "255" => "Reserved".to_string(),
         _ => code.to_string(),
     }
 }
 
 fn map_reason(code: &str) -> String {
     match code {
-        "0" => "The connection request was successfully authenticated and authorized by Network Policy Server.".to_string(),
-        "1" => "The connection request failed due to a Network Policy Server error.".to_string(),
-        "2" => "There are insufficient access rights to process the request.".to_string(),
-        "3" => "The Remote Authentication Dial-In User Service (RADIUS) Access-Request message that NPS received from the network access server was malformed.".to_string(),
-        "4" => "The NPS server was unable to access the Active Directory Domain Services (AD DS) global catalog.".to_string(),
-        "5" => "The Network Policy Server was unable to connect to a domain controller in the domain where the user account is located.".to_string(),
-        "6" => "The NPS server is unavailable. This issue can occur if the NPS server is running low on or is out of random access memory (RAM).".to_string(),
-        "7" => "The domain that is specified in the User-Name attribute of the RADIUS message does not exist.".to_string(),
-        "8" => "The user account that is specified in the User-Name attribute of the RADIUS message does not exist.".to_string(),
-        "9" => "An Internet Authentication Service (IAS) extension dynamic link library (DLL) that is installed on the NPS server discarded the connection request.".to_string(),
-        "10" => "An IAS extension dynamic link library (DLL) that is installed on the NPS server has failed and cannot perform its function.".to_string(),
-        "16" => "Authentication failed due to a user credentials mismatch. Either the user name provided does not match an existing user account or the password was incorrect.".to_string(),
-        "17" => "The user's attempt to change their password has failed.".to_string(),
-        "18" => "The authentication method used by the client computer is not supported by Network Policy Server for this connection.".to_string(),
-        "20" => "The client attempted to use LAN Manager authentication, which is not supported by Network Policy Server.".to_string(),
-        "21" => "An IAS extension dynamic link library (DLL) that is installed on the NPS server rejected the connection request.".to_string(),
-        "22" => "Network Policy Server was unable to negotiate the use of an Extensible Authentication Protocol (EAP) type with the client computer.".to_string(),
-        "23" => "An error occurred during the Network Policy Server use of the Extensible Authentication Protocol (EAP).".to_string(),
-        "32" => "NPS is joined to a workgroup and performs the authentication and authorization of connection requests using the local SAM database.".to_string(),
-        "33" => "The user that is attempting to connect to the network must change their password.".to_string(),
-        "34" => "The user account that is specified in the RADIUS Access-Request message is disabled.".to_string(),
-        "35" => "The user account that is specified in the RADIUS Access-Request message is expired.".to_string(),
-        "36" => "The user's authentication attempts have exceeded the maximum allowed number of failed attempts.".to_string(),
-        "37" => "According to AD DS user account logon hours, the user is not permitted to access the network on this day and time.".to_string(),
-        "38" => "Authentication failed due to a user account restriction or requirement that was not followed.".to_string(),
-        "48" => "The connection request did not match a configured network policy, so the connection request was denied by Network Policy Server.".to_string(),
-        "49" => "The connection request did not match a configured connection request policy, so the connection request was denied by Network Policy Server.".to_string(),
-        "64" => "Remote Access Account Lockout is enabled, and the user's authentication attempts have exceeded the designated lockout count.".to_string(),
-        "65" => "The Network Access Permission setting in the dial-in properties of the user account is set to Deny access to the user.".to_string(),
-        "66" => "Authentication failed. Either the client computer attempted to use an authentication method that is not enabled on the matching network policy or the client computer attempted to authenticate as Guest.".to_string(),
-        "67" => "NPS denied the connection request because the value of the Calling-Station-ID attribute did not match the value of Verify Caller ID.".to_string(),
-        "68" => "The user or computer does not have permission to access the network on this day at this time.".to_string(),
-        "69" => "The telephone number of the network access server does not match the value of the Calling-Station-ID attribute.".to_string(),
-        "70" => "The network access method used by the access client to connect to the network does not match the value of the NAS-Port-Type attribute.".to_string(),
-        "72" => "The user password has expired or is about to expire and the user must change their password.".to_string(),
-        "73" => "The purposes that are configured in the Application Policies extensions of the user or computer certificate are not valid or are missing.".to_string(),
-        "80" => "NPS attempted to write accounting data to the data store, but failed to do so for unknown reasons.".to_string(),
-        "96" => "Authentication failed due to an Extensible Authentication Protocol (EAP) session timeout.".to_string(),
-        "97" => "The authentication request was not processed because it contained a RADIUS message that was not appropriate for the secure authentication transaction.".to_string(),
-        "112" => "The local NPS proxy server forwarded a connection request to a remote RADIUS server, and the remote server rejected the connection request.".to_string(),
-        "113" => "The local NPS proxy attempted to forward a connection request to a member of a remote RADIUS server group that does not exist.".to_string(),
-        "115" => "The local NPS proxy did not forward a RADIUS message because it is not an accounting request or a connection request.".to_string(),
-        "116" => "The local NPS proxy server cannot forward the connection request to the remote RADIUS server (Socket error).".to_string(),
-        "117" => "The remote RADIUS server did not respond to the local NPS proxy within an acceptable time period.".to_string(),
-        "118" => "The local NPS proxy server received a RADIUS message that is malformed from a remote RADIUS server.".to_string(),
-        "256" => "The certificate provided by the user or computer as proof of their identity is a revoked certificate.".to_string(),
-        "257" => "NPS cannot access the certificate revocation list to verify whether the user or client computer certificate is valid or is revoked (Missing DLL).".to_string(),
-        "258" => "NPS cannot access the certificate revocation list to verify whether the user or client computer certificate is valid or is revoked.".to_string(),
-        "259" => "The certification authority that manages the certificate revocation list is not available.".to_string(),
-        "260" => "The EAP message has been altered so that the MD5 hash of the entire RADIUS message does not match.".to_string(),
-        "261" => "NPS cannot contact Active Directory Domain Services (AD DS) or the local user accounts database.".to_string(),
-        "262" => "NPS discarded the RADIUS message because it is incomplete and the signature was not verified.".to_string(),
-        "263" => "NPS did not receive complete credentials from the user or computer.".to_string(),
-        "264" => "The SSPI called by EAP reports that the system clocks on the NPS server and the access client are not synchronized.".to_string(),
-        "265" => "The certificate that the user or client computer provided to NPS chains to an enterprise root CA that is not trusted by the NPS server.".to_string(),
-        "266" => "NPS received a message that was either unexpected or incorrectly formatted.".to_string(),
-        "267" => "The certificate provided by the connecting user or computer is not valid (Missing Client Authentication purpose).".to_string(),
-        "268" => "The certificate provided by the connecting user or computer is expired.".to_string(),
-        "269" => "The SSPI called by EAP reports that the NPS server and the access client cannot communicate because they do not possess a common algorithm.".to_string(),
-        "270" => "The user is required to log on with a smart card, but they have attempted to log on by using other credentials.".to_string(),
-        "271" => "The connection request was not processed because the NPS server was in the process of shutting down or restarting.".to_string(),
-        "272" => "The certificate implies multiple user or computer accounts rather than one account.".to_string(),
-        "273" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider is not recognized.".to_string(),
-        "274" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider does not support the specified action.".to_string(),
-        "275" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider does not support the specified form.".to_string(),
-        "276" => "Authentication failed. The binary file that calls EAP cannot be verified and is not trusted.".to_string(),
-        "277" => "Authentication failed. The binary file that calls EAP is not signed, or the signer certificate cannot be found.".to_string(),
-        "278" => "Authentication failed. The certificate that was provided by the connecting user or computer is expired.".to_string(),
-        "279" => "Authentication failed. The certificate is not valid because the validity periods of certificates in the chain do not match.".to_string(),
-        "280" => "Authentication failed. The certificate is not valid and was not issued by a valid certification authority (CA).".to_string(),
-        "281" => "Authentication failed. The path length constraint in the certification chain has been exceeded.".to_string(),
-        "282" => "Authentication failed. The certificate contains a critical extension that is unrecognized by NPS.".to_string(),
-        "283" => "Authentication failed. The certificate does not contain the Client Authentication purpose in Application Policies extensions.".to_string(),
-        "284" => "Authentication failed. The certificate issuer and the parent of the certificate in the certificate chain do not match.".to_string(),
-        "285" => "Authentication failed. NPS cannot locate the certificate, or the certificate is incorrectly formed.".to_string(),
-        "286" | "295" => "Authentication failed. The CA is not trusted by the NPS server.".to_string(),
-        "287" => "Authentication failed. The certificate does not chain to an enterprise root CA that NPS trusts.".to_string(),
-        "288" => "Authentication failed due to an unspecified trust failure.".to_string(),
-        "289" => "Authentication failed. The certificate provided by the connecting user or computer is revoked.".to_string(),
-        "290" => "Authentication failed. A test or trial certificate is in use, however the test root CA is not trusted.".to_string(),
-        "291" => "Authentication failed because NPS cannot locate and access the certificate revocation list.".to_string(),
-        "292" => "Authentication failed. The User-Name attribute does not match the CN in the certificate.".to_string(),
-        "293" | "296" => "Authentication failed. The certificate is not configured with the Client Authentication purpose.".to_string(),
-        "294" => "Authentication failed because the certificate was explicitly marked as untrusted by the Administrator.".to_string(),
-        "297" => "Authentication failed. The certificate does not have a valid name.".to_string(),
-        "298" => "Authentication failed. Either the certificate does not contain a valid UPN or the User-Name does not match.".to_string(),
-        "299" => "Authentication failed. The sequence of information provided by internal components or protocols is incorrect.".to_string(),
-        "300" => "Authentication failed. The certificate is malformed and EAP cannot locate credential information.".to_string(),
-        "301" => "NPS terminated the authentication process. Invalid crypto-binding TLV (Potential Man-in-the-Middle).".to_string(),
-        "302" => "NPS terminated the authentication process. Missing crypto-binding TLV.".to_string(),
-         _ => code.to_string(),
+        "0" => "Succès".to_string(),
+        "1" => "Erreur NPS".to_string(),
+        "8" => "Utilisateur inexistant".to_string(),
+        "16" => "Mauvais identifiants".to_string(),
+        "22" => "Erreur EAP".to_string(),
+        _ => format!("Code {}", code),
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
+fn main() {
+    let app = MyWindow::new();
+    if let Err(e) = app.run() {
+        eprintln!("{}", e);
+    }
+}
