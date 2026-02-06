@@ -111,12 +111,12 @@ impl AppConfig {
         let screen_cy = winsafe::GetSystemMetrics(co::SM::CYSCREEN);
 
         // If dimensions are missing or excessively large (larger than the screen or previous bug)
-        // Adjust to a reasonable maximum (90% of screen)
+        // Reset to 1024x768 to ensure window borders are well within screen bounds.
         if cfg.window_width <= 0 || cfg.window_width > screen_cx {
-            cfg.window_width = (screen_cx * 9 / 10).max(800);
+            cfg.window_width = 1024;
         }
         if cfg.window_height <= 0 || cfg.window_height > screen_cy {
-            cfg.window_height = (screen_cy * 9 / 10).max(600);
+            cfg.window_height = 768;
         }
         cfg
     }
@@ -245,7 +245,8 @@ impl MyWindow {
                 title: &format!("{}{}", loader.get("ui-title"), loader.get("ui-window-suffix")),
                 class_icon: gui::Icon::Id(1),
                 size: (config.window_width, config.window_height),
-                style: co::WS::OVERLAPPEDWINDOW | co::WS::VISIBLE | co::WS::CLIPCHILDREN,
+                style: co::WS::CAPTION | co::WS::SYSMENU | co::WS::MINIMIZEBOX | co::WS::MAXIMIZEBOX | co::WS::SIZEBOX | co::WS::VISIBLE | co::WS::CLIPCHILDREN,
+                ex_style: co::WS_EX::WINDOWEDGE | co::WS_EX::APPWINDOW,
                 ..Default::default()
             },
         );
@@ -488,19 +489,7 @@ impl MyWindow {
             move |p| Ok(me.on_lst_nm_custom_draw(p))
         });
 
-        self.wnd.on().wm_set_cursor({
-            let me = self.clone();
-            move |p| {
-                if p.hit_test == co::HT::CLIENT && *me.is_busy.lock().expect("Lock failed") {
-                    if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-                        unsafe { SetCursor(hcursor.raw_copy()); }
-                    }
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-        });
+
     }
 
     fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
