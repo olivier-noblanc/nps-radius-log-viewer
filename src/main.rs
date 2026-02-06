@@ -101,10 +101,17 @@ impl Default for AppConfig {
 
 impl AppConfig {
     fn load() -> Self {
-        fs::read_to_string("config.json")
+        let mut cfg: Self = fs::read_to_string("config.json")
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        // Safety clamp: If dimensions are excessively large (due to previous bug), reset them.
+        if cfg.window_width > 3000 || cfg.window_height > 2000 {
+            cfg.window_width = 1100;
+            cfg.window_height = 700;
+        }
+        cfg
     }
 
     fn save(&self) -> anyhow::Result<()> {
