@@ -373,12 +373,14 @@ impl MyWindow {
                 me.lst_logs.items().set_count(count as _, None).expect("Set count failed");
                 
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-                let status_fmt = loader.get("ui-status-display")
-                    .replace("{$count}", &count.to_string())
-                    .replace("{ $count }", &count.to_string())
-                    .replace("{$raw}", &raw.to_string())
-                    .replace("{ $raw }", &raw.to_string());
+                let count_str = count.to_string();
+                let raw_str = raw.to_string();
                 
+                let status_fmt = clean_tr(&loader.get("ui-status-display"))
+                    .replace("{ $count }", &count_str)
+                    .replace("{$count}", &count_str)
+                    .replace("{ $raw }", &raw_str)
+                    .replace("{$raw}", &raw_str);
                 
                 let _ = me.lbl_status.hwnd().SetWindowText(&status_fmt);
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
@@ -913,15 +915,17 @@ impl MyWindow {
             }
         }
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        let visible = self.visible_cols.lock().expect("Lock failed").clone();
         let config = self.config.lock().expect("Lock failed");
-        let visible = self.visible_cols.lock().expect("Lock failed");
         let all_cols = LogColumn::all();
         
         for &col in visible.iter() {
             let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
             let width = config.column_widths.get(col_idx).copied().filter(|&w| w > 0).unwrap_or(150);
-            self.lst_logs.cols().add(&loader.get(col.ftl_key()), width).expect("Add col failed");
+            let text = clean_tr(&loader.get(col.ftl_key()));
+            self.lst_logs.cols().add(&text, width).expect("Add col failed");
         }
+        drop(config);
     }
 }
 
@@ -986,6 +990,7 @@ fn apply_filter_logic(
             };
             if sort_descending { ord.reverse() } else { ord }
         });
+        drop(items);
         ids
     };
 
@@ -1084,12 +1089,16 @@ fn map_packet_type(code: &str) -> String {
 fn map_reason(code: &str) -> String {
     let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
     let key = format!("nps-reasons-{code}");
-    let val = loader.get(&key);
+    let val = clean_tr(&loader.get(&key));
     if val == key { 
-        loader.get("ui-map-code")
-            .replace("{$code}", code)
+        clean_tr(&loader.get("ui-map-code"))
             .replace("{ $code }", code)
+            .replace("{$code}", code)
     } else { val }
+}
+
+fn clean_tr(s: &str) -> String {
+    s.chars().filter(|&c| !('\u{2066}'..='\u{2069}').contains(&c)).collect()
 }
 
 fn main() {
