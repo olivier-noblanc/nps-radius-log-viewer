@@ -1,6 +1,6 @@
 {
-  "window_width": 1920,
-  "window_height": 991,
+  "window_width": 900,
+  "window_height": 550,
   "column_widths": [
     150,
     120,
@@ -10,6 +10,17 @@
     130,
     150,
     350,
-    153
+    150
+  ],
+  "visible_columns": [
+    "Timestamp",
+    "Type",
+    "Server",
+    "ApIp",
+    "ApName",
+    "Mac",
+    "User",
+    "Reason",
+    "Session"
   ]
 }

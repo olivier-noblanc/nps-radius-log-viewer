@@ -84,6 +84,7 @@ struct AppConfig {
     window_width: i32,
     window_height: i32,
     column_widths: Vec<i32>,
+    visible_columns: Vec<LogColumn>,
 }
 
 impl Default for AppConfig {
@@ -92,6 +93,7 @@ impl Default for AppConfig {
             window_width: 900,
             window_height: 550,
             column_widths: vec![150, 120, 120, 110, 150, 130, 150, 350, 150],
+            visible_columns: LogColumn::all(),
         }
     }
 }
@@ -131,9 +133,40 @@ impl RadiusRequest {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SortColumn {
-    Timestamp, Type, Server, ApIp, ApName, Mac, User, Reason
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+enum LogColumn {
+    Timestamp,
+    Type,
+    Server,
+    ApIp,
+    ApName,
+    Mac,
+    User,
+    Reason,
+    Session,
+}
+
+impl LogColumn {
+    fn all() -> Vec<Self> {
+        vec![
+            Self::Timestamp, Self::Type, Self::Server, Self::ApIp,
+            Self::ApName, Self::Mac, Self::User, Self::Reason, Self::Session
+        ]
+    }
+
+    fn ftl_key(&self) -> &'static str {
+        match self {
+            Self::Timestamp => "col-timestamp",
+            Self::Type => "col-type",
+            Self::Server => "col-server",
+            Self::ApIp => "col-ap-ip",
+            Self::ApName => "col-ap-name",
+            Self::Mac => "col-mac",
+            Self::User => "col-user",
+            Self::Reason => "col-reason",
+            Self::Session => "col-session",
+        }
+    }
 }
 
 // --- FFI for SetCursor (missing in winsafe 0.0.27) ---
@@ -179,8 +212,9 @@ struct MyWindow {
     raw_count:    Arc<Mutex<usize>>,
     filtered_ids: Arc<Mutex<Vec<usize>>>,
     show_errors:  Arc<Mutex<bool>>,
-    sort_col:     Arc<Mutex<SortColumn>>,
+    sort_col:     Arc<Mutex<LogColumn>>,
     sort_desc:    Arc<Mutex<bool>>,
+    visible_cols: Arc<Mutex<Vec<LogColumn>>>,
     config:       Arc<Mutex<AppConfig>>,
     is_busy:      Arc<Mutex<bool>>,
 }
@@ -260,8 +294,9 @@ impl MyWindow {
             raw_count:    Arc::new(Mutex::new(0)),
             filtered_ids: Arc::new(Mutex::new(Vec::new())),
             show_errors:  Arc::new(Mutex::new(false)),
-            sort_col:     Arc::new(Mutex::new(SortColumn::Timestamp)),
+            sort_col:     Arc::new(Mutex::new(LogColumn::Timestamp)),
             sort_desc:    Arc::new(Mutex::new(true)),
+            visible_cols: Arc::new(Mutex::new(config.visible_columns.clone())),
             config:       Arc::new(Mutex::new(config)),
             is_busy:      Arc::new(Mutex::new(false)),
         };
@@ -276,13 +311,20 @@ impl MyWindow {
             let me = self.clone();
             move || {
                 let mut config_save = me.config.lock().expect("Lock failed");
-                let mut cw_v = Vec::new();
-                for i in 0..9 {
+                let visible = me.visible_cols.lock().expect("Lock failed");
+                let all_cols = LogColumn::all();
+
+                for (i, &col) in visible.iter().enumerate() {
+                    let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
                     unsafe {
-                        cw_v.push(me.lst_logs.hwnd().SendMessage(msg::lvm::GetColumnWidth { index: i as _ }).expect("Get column width failed") as i32);
+                        if let Ok(width) = me.lst_logs.hwnd().SendMessage(msg::lvm::GetColumnWidth { index: i as _ }) {
+                            if col_idx < config_save.column_widths.len() {
+                                config_save.column_widths[col_idx] = width as i32;
+                            }
+                        }
                     }
                 }
-                config_save.column_widths = cw_v;
+                config_save.visible_columns = visible.clone();
                 
                 let rect = me.wnd.hwnd().GetClientRect().expect("Get window rect failed");
                 config_save.window_width = rect.right;
@@ -297,10 +339,6 @@ impl MyWindow {
         self.wnd.on().wm_create({
             let me = self.clone();
             move |_| {
-                let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-                let config_init = me.config.lock().expect("Lock failed");
-                let cw = &config_init.column_widths;
-
                 if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).unwrap().LoadIcon(winsafe::IdIdiStr::Id(1)) {
                      unsafe {
                         let _ = me.wnd.hwnd().SendMessage(msg::wm::SetIcon { hicon: winsafe::HICON::from_ptr(hicon_guard.ptr()), size: co::ICON_SZ::BIG });
@@ -315,16 +353,8 @@ impl MyWindow {
                     });
                 }
                 
-                // Initializing columns here, when HWND is valid
-                me.lst_logs.cols().add(&loader.get("col-timestamp"), cw.first().copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-type"), cw.get(1).copied().filter(|&w| w > 0).unwrap_or(120)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-server"), cw.get(2).copied().filter(|&w| w > 0).unwrap_or(120)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-ap-ip"), cw.get(3).copied().filter(|&w| w > 0).unwrap_or(110)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-ap-name"), cw.get(4).copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-mac"), cw.get(5).copied().filter(|&w| w > 0).unwrap_or(130)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-user"), cw.get(6).copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-reason"), cw.get(7).copied().filter(|&w| w > 0).unwrap_or(350)).expect("Add col failed");
-                me.lst_logs.cols().add(&loader.get("col-session"), cw.get(8).copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
+                // Initializing columns dynamically
+                me.refresh_columns();
 
                 Ok(0)
             }
@@ -633,7 +663,7 @@ impl MyWindow {
                 let cursor_pos = winsafe::GetCursorPos().expect("GetCursorPos failed");
                 if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, cursor_pos, self.lst_logs.hwnd())? {
                     let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
-                    match cmd_id as u16 {
+                    match cmd_id {
                         1001 => {
                             let _ = clipboard_win::set_clipboard_string(&cell_text);
                         },
@@ -644,13 +674,70 @@ impl MyWindow {
                         _ => {}
                     }
                 }
+        } else {
+            // Check if it's on header
+            let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.expect("Get header failed");
+            let rect = h_header.GetWindowRect().expect("Get header rect failed");
+            let pt_screen = winsafe::GetCursorPos().expect("Get cursor pos failed");
+            if pt_screen.x >= rect.left && pt_screen.x <= rect.right && pt_screen.y >= rect.top && pt_screen.y <= rect.bottom {
+                return self.show_column_context_menu();
+            }
         }
         Ok(0)
+    }
+
+    fn show_column_context_menu(&self) -> winsafe::AnyResult<isize> {
+        let h_menu = winsafe::HMENU::CreatePopupMenu()?;
+        let visible = self.visible_cols.lock().expect("Lock failed");
+        let all_cols = LogColumn::all();
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+
+        for (i, col) in all_cols.iter().enumerate() {
+            let is_visible = visible.contains(col);
+            let mut flags = co::MF::STRING;
+            if is_visible {
+                flags |= co::MF::CHECKED;
+            }
+            h_menu.AppendMenu(flags, winsafe::IdMenu::Id(2000 + i as u16), winsafe::BmpPtrStr::from_str(&loader.get(col.ftl_key())))?;
+        }
+
+        let pt = winsafe::GetCursorPos().expect("GetCursorPos failed");
+        if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, pt, self.wnd.hwnd())? {
+            let col_idx = (cmd_id - 2000) as usize;
+            if col_idx < all_cols.len() {
+                let clicked_col = all_cols[col_idx];
+                drop(visible); // Unlock
+                self.toggle_column_visibility(clicked_col);
+            }
+        }
+        Ok(0)
+    }
+
+    fn toggle_column_visibility(&self, col: LogColumn) {
+        let mut visible = self.visible_cols.lock().expect("Lock failed");
+        if visible.contains(&col) {
+            if visible.len() > 1 { 
+                visible.retain(|&c| c != col);
+            }
+        } else {
+            let all_cols = LogColumn::all();
+            let mut new_visible = Vec::new();
+            for &c in all_cols.iter() {
+                if visible.contains(&c) || c == col {
+                    new_visible.push(c);
+                }
+            }
+            *visible = new_visible;
+        }
+        drop(visible);
+        self.refresh_columns();
+        let _ = self.on_txt_search_en_change();
     }
 
     fn on_lst_lvn_get_disp_info(&self, p: &winsafe::NMLVDISPINFO) -> winsafe::AnyResult<()> {
         let items = self.all_items.lock().expect("Lock failed");
         let filtered = self.filtered_ids.lock().expect("Lock failed");
+        let visible = self.visible_cols.lock().expect("Lock failed");
         
         let item_idx = p.item.iItem;
         if item_idx < 0 || item_idx >= filtered.len() as i32 { return Ok(()); }
@@ -659,17 +746,22 @@ impl MyWindow {
         let req = &items[real_idx];
 
         let col_idx = p.item.iSubItem;
-        let text = match col_idx {
-            0 => &req.timestamp,
-            1 => &req.req_type,
-            2 => &req.server,
-            3 => &req.ap_ip,
-            4 => &req.ap_name,
-            5 => &req.mac,
-            6 => &req.user,
-            7 => if req.reason.is_empty() { &req.resp_type } else { &req.reason },
-            8 => &req.session_id,
-            _ => "",
+        let log_col = if let Some(&c) = visible.get(col_idx as usize) {
+            c
+        } else {
+            return Ok(());
+        };
+
+        let text = match log_col {
+            LogColumn::Timestamp => &req.timestamp,
+            LogColumn::Type => &req.req_type,
+            LogColumn::Server => &req.server,
+            LogColumn::ApIp => &req.ap_ip,
+            LogColumn::ApName => &req.ap_name,
+            LogColumn::Mac => &req.mac,
+            LogColumn::User => &req.user,
+            LogColumn::Reason => if req.reason.is_empty() { &req.resp_type } else { &req.reason },
+            LogColumn::Session => &req.session_id,
         };
 
         use std::cell::RefCell;
@@ -693,18 +785,13 @@ impl MyWindow {
         let mut sort_col_g = self.sort_col.lock().expect("Lock failed");
         let mut sort_desc_g = self.sort_desc.lock().expect("Lock failed");
 
-        let new_col = match p.iSubItem {
-            0 => SortColumn::Timestamp,
-            1 => SortColumn::Type,
-            2 => SortColumn::Server,
-            3 => SortColumn::ApIp,
-            4 => SortColumn::ApName,
-            5 => SortColumn::Mac,
-            6 => SortColumn::User,
-            7 => SortColumn::Reason,
-            8 => SortColumn::Timestamp, // Session ID, use timestamp for now
-            _ => return Ok(()),
+        let visible = self.visible_cols.lock().expect("Lock failed");
+        let new_col = if let Some(&col) = visible.get(p.iSubItem as usize) {
+            col
+        } else {
+            return Ok(());
         };
+        drop(visible);
 
         if *sort_col_g == new_col {
             *sort_desc_g = !*sort_desc_g;
@@ -814,6 +901,24 @@ impl MyWindow {
     pub fn run(&self) -> winsafe::AnyResult<i32> {
         self.wnd.run_main(None)
     }
+
+    fn refresh_columns(&self) {
+        while self.lst_logs.cols().count().unwrap_or(0) > 0 {
+            unsafe {
+                let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::DeleteColumn { index: 0 });
+            }
+        }
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        let config = self.config.lock().expect("Lock failed");
+        let visible = self.visible_cols.lock().expect("Lock failed");
+        let all_cols = LogColumn::all();
+        
+        for &col in visible.iter() {
+            let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
+            let width = config.column_widths.get(col_idx).copied().filter(|&w| w > 0).unwrap_or(150);
+            self.lst_logs.cols().add(&loader.get(col.ftl_key()), width).expect("Add col failed");
+        }
+    }
 }
 
 // --- LOGIC FUNCTIONS ---
@@ -823,7 +928,7 @@ fn apply_filter_logic(
     filtered_ids: &Arc<Mutex<Vec<usize>>>,
     query: &str,
     show_errors_only: bool,
-    sort_col: SortColumn,
+    sort_col: LogColumn,
     sort_descending: bool,
 ) {
     let q = query.trim().to_lowercase();
@@ -861,18 +966,19 @@ fn apply_filter_logic(
             let a = &items[a_idx];
             let b = &items[b_idx];
             let ord = match sort_col {
-                SortColumn::Timestamp => a.timestamp.cmp(&b.timestamp),
-                SortColumn::Type => a.req_type.cmp(&b.req_type),
-                SortColumn::Server => a.server.cmp(&b.server),
-                SortColumn::ApIp => a.ap_ip.cmp(&b.ap_ip),
-                SortColumn::ApName => a.ap_name.cmp(&b.ap_name),
-                SortColumn::Mac => a.mac.cmp(&b.mac),
-                SortColumn::User => a.user.cmp(&b.user),
-                SortColumn::Reason => {
+                LogColumn::Timestamp => a.timestamp.cmp(&b.timestamp),
+                LogColumn::Type => a.req_type.cmp(&b.req_type),
+                LogColumn::Server => a.server.cmp(&b.server),
+                LogColumn::ApIp => a.ap_ip.cmp(&b.ap_ip),
+                LogColumn::ApName => a.ap_name.cmp(&b.ap_name),
+                LogColumn::Mac => a.mac.cmp(&b.mac),
+                LogColumn::User => a.user.cmp(&b.user),
+                LogColumn::Reason => {
                     let r_a = if a.reason.is_empty() { &a.resp_type } else { &a.reason };
                     let r_b = if b.reason.is_empty() { &b.resp_type } else { &b.reason };
                     r_a.cmp(r_b)
                 }
+                LogColumn::Session => a.session_id.cmp(&b.session_id),
             };
             if sort_descending { ord.reverse() } else { ord }
         });
