@@ -534,6 +534,11 @@ impl MyWindow {
             let _busy = BusyCursor::new(unsafe { self.wnd.hwnd().raw_copy() });
             *self.is_busy.lock().expect("Lock failed") = true;
             
+            // Proactive safety: Clear list view count before background update starts (if not appending)
+            if !self.cb_append.is_checked() {
+                let _ = self.lst_logs.items().set_count(0, None);
+            }
+            
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
             let _ = self.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-loading"));
             
@@ -616,6 +621,11 @@ impl MyWindow {
             
             let _busy = BusyCursor::new(unsafe { self.wnd.hwnd().raw_copy() });
             *self.is_busy.lock().expect("Lock failed") = true;
+
+            // Proactive safety: Clear list view count before background update starts (if not appending)
+            if !self.cb_append.is_checked() {
+                let _ = self.lst_logs.items().set_count(0, None);
+            }
             
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
             let _ = self.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-loading-folder"));
@@ -808,6 +818,7 @@ impl MyWindow {
         };
 
         let items = self.all_items.lock().expect("Lock failed");
+        if real_idx >= items.len() { return Ok(()); }
         let req = &items[real_idx];
 
         let text = match log_col {
