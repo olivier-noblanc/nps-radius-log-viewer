@@ -330,9 +330,9 @@ impl MyWindow {
                 config_save.visible_columns.clone_from(&visible);
                 drop(visible);
                 
-                let rect = me.wnd.hwnd().GetClientRect().expect("Get window rect failed");
-                config_save.window_width = rect.right;
-                config_save.window_height = rect.bottom;
+                let rect = me.wnd.hwnd().GetWindowRect().expect("Get window rect failed");
+                config_save.window_width = rect.right - rect.left;
+                config_save.window_height = rect.bottom - rect.top;
                 
                 let _ = config_save.save();
                 
@@ -476,8 +476,8 @@ impl MyWindow {
 
         self.wnd.on().wm_set_cursor({
             let me = self.clone();
-            move |_| {
-                if *me.is_busy.lock().expect("Lock failed") {
+            move |p| {
+                if *me.is_busy.lock().expect("Lock failed") && p.hit_test == co::HT::CLIENT {
                     if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
                         unsafe { SetCursor(hcursor.raw_copy()); }
                     }

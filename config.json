@@ -2,14 +2,14 @@
   "window_width": 1920,
   "window_height": 991,
   "column_widths": [
-    150,
-    120,
-    120,
-    110,
-    150,
-    130,
-    150,
-    350,
+    167,
+    115,
+    139,
+    93,
+    329,
+    141,
+    191,
+    206,
     150
   ],
   "visible_columns": [
@@ -20,7 +20,6 @@
     "ApName",
     "Mac",
     "User",
-    "Reason",
-    "Session"
+    "Reason"
   ]
 }
