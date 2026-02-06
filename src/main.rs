@@ -27,6 +27,7 @@ static LANGUAGE_LOADER: OnceLock<FluentLanguageLoader> = OnceLock::new();
 
 const WM_LOAD_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 1) };
 const WM_LOAD_ERROR: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 2) };
+const WM_PROGRESS_UPDATE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 3) };
 
 // --- XML Structures ---
 #[derive(Debug, Deserialize, Clone)]
@@ -275,16 +276,16 @@ impl MyWindow {
                 ..Default::default()
             }),
             lbl_status:   gui::Label::new(&wnd, gui::LabelOpts {
-                position: (10, config.window_height - 30),
-                size: (config.window_width - 150, 20),
-                resize_behavior: (gui::Horz::None, gui::Vert::Repos),
+                position: (10, config.window_height - 35),
+                size: (config.window_width - 20, 20),
+                resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
                 ..Default::default()
             }),
             progress:     gui::ProgressBar::new(&wnd, gui::ProgressBarOpts {
-                position: (config.window_width - 130, config.window_height - 25),
-                size: (110, 15),
+                position: (0, config.window_height - 10),
+                size: (config.window_width, 10),
                 control_style: co::PBS::MARQUEE,
-                resize_behavior: (gui::Horz::Repos, gui::Vert::Repos),
+                resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
                 ..Default::default()
             }),
             all_items:    Arc::new(Mutex::new(Vec::new())),
@@ -404,6 +405,15 @@ impl MyWindow {
             }
         });
 
+        self.wnd.on().wm(WM_PROGRESS_UPDATE, {
+            let me = self.clone();
+            move |p| {
+                let percent = p.wparam as u32;
+                me.progress.set_position(percent);
+                Ok(0)
+            }
+        });
+
         self.wnd.on().wm(WM_LOAD_ERROR, {
             let me = self.clone();
             move |_| {
@@ -490,6 +500,7 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
+            self.progress.set_position(0);
             let _ = self.progress.hwnd().ShowWindow(co::SW::SHOW);
             self.progress.set_marquee(true);
             *self.is_busy.lock().expect("Lock failed") = true;
@@ -579,8 +590,9 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
+            self.progress.set_position(0);
             let _ = self.progress.hwnd().ShowWindow(co::SW::SHOW);
-            self.progress.set_marquee(true);
+            self.progress.set_marquee(false); 
             *self.is_busy.lock().expect("Lock failed") = true;
 
             // Proactive safety: Clear list view count before background update starts (if not appending)
@@ -621,13 +633,25 @@ impl MyWindow {
                 
                 files.sort_by_key(|f| f.1); 
 
+                let num_files = files.len() as f32;
                 let mut total_items = Vec::new();
                 let mut total_raw = 0;
                 
-                for (path, _) in files {
+                for (i, (path, _)) in files.into_iter().enumerate() {
                     if let Ok((items, raw)) = parse_full_logic(&path.to_string_lossy()) {
                         total_items.extend(items);
                         total_raw += raw;
+                    }
+                    
+                    if num_files > 0.0 {
+                        let percent = ((i as f32 + 1.0) / num_files * 100.0) as usize;
+                        unsafe {
+                            let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                                msg_id: WM_PROGRESS_UPDATE,
+                                wparam: percent,
+                                lparam: 0,
+                            });
+                        }
                     }
                 }
 
