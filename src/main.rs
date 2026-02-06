@@ -350,12 +350,11 @@ impl MyWindow {
                 // Extended styles for ListView
                 unsafe {
                     me.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
-                        mask: co::LVS_EX::FULLROWSELECT,
-                        style: co::LVS_EX::FULLROWSELECT,
+                        mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+                        style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
-                    // Disable Explorer theme: some virtualized drivers/performance modes 
-                    // only respect CustomDraw in classic mode.
-                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
+                    // Restore Explorer theme as FillRect should overcome theme overrides
+                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("Explorer", None);
                 }
                 
                 // Initializing columns dynamically
@@ -659,16 +658,18 @@ impl MyWindow {
         Ok(())
     }
 
-    fn on_lst_context_menu(&self, pt_screen: winsafe::POINT, target_hwnd: winsafe::HWND) -> winsafe::AnyResult<()> {
+    fn on_lst_context_menu(&self, pt_screen: winsafe::POINT, _target_hwnd: winsafe::HWND) -> winsafe::AnyResult<()> {
         let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
         
-        if target_hwnd == h_header {
+        // Priority 1: Physical check of header area
+        let rc_header = h_header.GetWindowRect().unwrap_or_default();
+        if pt_screen.x >= rc_header.left && pt_screen.x <= rc_header.right
+            && pt_screen.y >= rc_header.top && pt_screen.y <= rc_header.bottom {
             self.show_column_context_menu()?;
             return Ok(());
         }
 
         let pt_client = self.lst_logs.hwnd().ScreenToClient(pt_screen).expect("ScreenToClient failed");
-
         let mut lvhti = winsafe::LVHITTESTINFO {
             pt: pt_client,
             ..Default::default()
@@ -694,8 +695,7 @@ impl MyWindow {
                     }
                 }
         } else {
-            // Background of listview, still show column menu? 
-            // Better UX to show it if not on an item
+            // Background or Header edge cases - show column menu
             self.show_column_context_menu()?;
         }
         Ok(())
@@ -920,8 +920,11 @@ impl MyWindow {
                     ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
                 };
                 if let Some(clr) = color {
-                    let p_ptr = std::ptr::from_ref(p).cast_mut();
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                        p.mcd.hdc.FillRect(p.mcd.rc, &brush);
+                    }
+                    let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
                         (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
@@ -933,7 +936,7 @@ impl MyWindow {
                     co::CDRF::NOTIFYSUBITEMDRAW
                 }
             },
-            _ if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT | co::CDDS::SUBITEM => {
+            _ if p.mcd.dwDrawStage.raw() == co::CDDS::ITEMPREPAINT.raw() | co::CDDS::SUBITEM.raw() => {
                 let color = {
                     let items = self.all_items.lock().expect("Lock failed");
                     let ids = self.filtered_ids.lock().expect("Lock failed");
@@ -941,8 +944,12 @@ impl MyWindow {
                 };
                 
                 if let Some(clr) = color {
-                    let p_ptr = std::ptr::from_ref(p).cast_mut();
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                    // Also fill subitem rect for safety
+                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                        p.mcd.hdc.FillRect(p.mcd.rc, &brush);
+                    }
+                    let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
                         (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
