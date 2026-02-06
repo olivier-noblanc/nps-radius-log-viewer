@@ -374,8 +374,11 @@ impl MyWindow {
                 
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let status_fmt = loader.get("ui-status-display")
+                    .replace("{$count}", &count.to_string())
                     .replace("{ $count }", &count.to_string())
+                    .replace("{$raw}", &raw.to_string())
                     .replace("{ $raw }", &raw.to_string());
+                
                 
                 let _ = me.lbl_status.hwnd().SetWindowText(&status_fmt);
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
@@ -876,25 +879,26 @@ impl MyWindow {
     }
 
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
-        if p.mcd.dwDrawStage == co::CDDS::PREPAINT {
-            co::CDRF::NOTIFYITEMDRAW
-        } else if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT {
-            let color = {
-                let items = self.all_items.lock().expect("Lock failed");
-                let ids = self.filtered_ids.lock().expect("Lock failed");
-                ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
-            };
-            
-            if let Some((r, g, b)) = color {
-                let p_ptr = std::ptr::from_ref(p).cast_mut();
-                unsafe {
-                    (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
-                    (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0); // Force black text
+        match p.mcd.dwDrawStage {
+            co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
+            co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
+            _ if p.mcd.dwDrawStage == (co::CDDS::ITEMPREPAINT | co::CDDS::SUBITEM) => {
+                let color = {
+                    let items = self.all_items.lock().expect("Lock failed");
+                    let ids = self.filtered_ids.lock().expect("Lock failed");
+                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
+                };
+                
+                if let Some((r, g, b)) = color {
+                    let p_ptr = std::ptr::from_ref(p).cast_mut();
+                    unsafe {
+                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
+                        (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
+                    }
                 }
-            }
-            co::CDRF::DODEFAULT
-        } else {
-            co::CDRF::DODEFAULT
+                co::CDRF::DODEFAULT
+            },
+            _ => co::CDRF::DODEFAULT,
         }
     }
 
@@ -1082,7 +1086,9 @@ fn map_reason(code: &str) -> String {
     let key = format!("nps-reasons-{code}");
     let val = loader.get(&key);
     if val == key { 
-        loader.get("ui-map-code").replace("{ $code }", code)
+        loader.get("ui-map-code")
+            .replace("{$code}", code)
+            .replace("{ $code }", code)
     } else { val }
 }
 
