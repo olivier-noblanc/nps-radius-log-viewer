@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(unsafe_code)]
 
 use winsafe::prelude::*;
 use winsafe::{gui, co, msg};
@@ -124,6 +125,7 @@ enum SortColumn {
 
 // --- UI Application ---
 
+#[derive(Clone)]
 struct MyWindow {
     wnd:          gui::WindowMain,
     lst_logs:     gui::ListView,
@@ -158,201 +160,161 @@ impl MyWindow {
             },
         );
 
-        let btn_open = gui::Button::new(
-            &wnd,
-            gui::ButtonOpts {
-                text: "📂 Ouvrir Log",
-                position: (10, 10),
-                width: 110,
-                height: 30,
-                ..Default::default()
-            },
-        );
-
-        let btn_open_folder = gui::Button::new(
-            &wnd,
-            gui::ButtonOpts {
-                text: "📂 Dossier",
-                position: (130, 10),
-                width: 100,
-                height: 30,
-                ..Default::default()
-            },
-        );
-
-        let btn_rejects = gui::Button::new(
-            &wnd,
-            gui::ButtonOpts {
-                text: "⚠️ Erreurs",
-                position: (240, 10),
-                width: 110,
-                height: 30,
-                ..Default::default()
-            },
-        );
-
-        let txt_search = gui::Edit::new(
-            &wnd,
-            gui::EditOpts {
-                position: (360, 13),
-                width: 250,
-                ..Default::default()
-            },
-        );
-
-        let cb_append = gui::CheckBox::new(
-            &wnd,
-            gui::CheckBoxOpts {
-                text: "Append",
-                position: (620, 15),
-            size: (80, 20),
-                ..Default::default()
-            },
-        );
-
-        let btn_copy = gui::Button::new(
-            &wnd,
-            gui::ButtonOpts {
-                text: "📋 Copier",
-                position: (710, 10),
-                width: 90,
-                height: 30,
-                ..Default::default()
-            },
-        );
-
-        let lst_logs = gui::ListView::new(
-            &wnd,
-            gui::ListViewOpts {
-                position: (10, 50),
-                size: (1180, 710),
-                control_style: co::LVS::REPORT | co::LVS::SHOWSELALWAYS | co::LVS::OWNERDATA,
-                ..Default::default()
-            },
-        );
-
-        let lbl_status = gui::Label::new(
-            &wnd,
-            gui::LabelOpts {
-                text: "Prêt. Ouvrez un fichier log.",
-                position: (10, 765),
-                ..Default::default()
-            },
-        );
-
         let new_self = Self {
-            wnd,
-            lst_logs,
-            txt_search,
-            btn_open,
-            btn_open_folder,
-            btn_rejects,
-            cb_append,
-            btn_copy,
-            lbl_status,
+            wnd: wnd.clone(),
+            lst_logs:     gui::ListView::new(&wnd, gui::ListViewOpts { ..Default::default() }),
+            txt_search:   gui::Edit::new(&wnd, gui::EditOpts { ..Default::default() }),
+            btn_open:     gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
+            btn_open_folder: gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
+            btn_rejects:  gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
+            cb_append:    gui::CheckBox::new(&wnd, gui::CheckBoxOpts { ..Default::default() }),
+            btn_copy:     gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
+            lbl_status:   gui::Label::new(&wnd, gui::LabelOpts { ..Default::default() }),
             all_items:    Arc::new(Mutex::new(Vec::new())),
             raw_count:    Arc::new(Mutex::new(0)),
             filtered_ids: Arc::new(Mutex::new(Vec::new())),
-            show_errors: Arc::new(Mutex::new(false)),
-            sort_col: Arc::new(Mutex::new(SortColumn::Timestamp)),
-            sort_desc: Arc::new(Mutex::new(true)),
-            config: Arc::new(Mutex::new(config)),
+            show_errors:  Arc::new(Mutex::new(false)),
+            sort_col:     Arc::new(Mutex::new(SortColumn::Timestamp)),
+            sort_desc:    Arc::new(Mutex::new(true)),
+            config:       Arc::new(Mutex::new(config.clone())),
         };
 
+        new_self.setup_widgets(&config);
         new_self.on_init();
         new_self.on_events();
         new_self
     }
 
+    fn setup_widgets(&self, _config: &AppConfig) {
+        let _ = self.btn_open.hwnd().SetWindowText("📂 Ouvrir Log");
+        self.btn_open.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 10, y: 10 }, winsafe::SIZE { cx: 120, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
+
+        let _ = self.btn_open_folder.hwnd().SetWindowText("📂 Dossier");
+        self.btn_open_folder.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 140, y: 10 }, winsafe::SIZE { cx: 120, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
+
+        let _ = self.btn_rejects.hwnd().SetWindowText("⚠️ Erreurs");
+        self.btn_rejects.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 270, y: 10 }, winsafe::SIZE { cx: 120, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
+
+        self.txt_search.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 400, y: 14 }, winsafe::SIZE { cx: 200, cy: 22 }, co::SWP::NOZORDER).expect("Pos failed");
+
+        let _ = self.cb_append.hwnd().SetWindowText("Append");
+        self.cb_append.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 610, y: 14 }, winsafe::SIZE { cx: 80, cy: 20 }, co::SWP::NOZORDER).expect("Pos failed");
+
+        let _ = self.btn_copy.hwnd().SetWindowText("📋 Copier");
+        self.btn_copy.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 700, y: 10 }, winsafe::SIZE { cx: 100, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
+
+        // Extended styles for ListView
+        unsafe {
+            self.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
+                mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+                style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+            });
+        }
+
+        let _ = self.lbl_status.hwnd().SetWindowText("Prêt. Ouvrez un fichier log.");
+    }
+
     fn on_init(&self) {
-        let lst = self.lst_logs.clone();
-        let config_init = self.config.clone();
+        let config_init = self.config.lock().expect("Lock failed");
         
-        self.wnd.on().wm_create(move |_| {
-            let cw = &config_init.lock().expect("Lock failed").column_widths;
-            let cols = lst.cols();
-            
-            cols.add("Timestamp", cw.first().copied().unwrap_or(150))?;
-            cols.add("Type", cw.get(1).copied().unwrap_or(120))?;
-            cols.add("Serveur", cw.get(2).copied().unwrap_or(120))?;
-            cols.add("AP IP", cw.get(3).copied().unwrap_or(110))?;
-            cols.add("Nom AP", cw.get(4).copied().unwrap_or(150))?;
-            cols.add("MAC", cw.get(5).copied().unwrap_or(130))?;
-            cols.add("Utilisateur", cw.get(6).copied().unwrap_or(150))?;
-            cols.add("Résultat/Raison", cw.get(7).copied().unwrap_or(350))?;
-            lst.set_extended_style(true, co::LVS_EX::FULLROWSELECT | co::LVS_EX::GRIDLINES | co::LVS_EX::DOUBLEBUFFER);
-            Ok(0)
+        for (i, &w) in config_init.column_widths.iter().enumerate() {
+            self.lst_logs.cols().add("", w as _).expect("Add column failed");
+            if i == 8 { break; } 
+        }
+        
+        let _cols = self.lst_logs.cols();
+        let cw = &config_init.column_widths;
+        
+        // Titles are added during the first add or via LVM_SETCOLUMN
+        // For simplicity, let's just use the Titles in cols().add in a WM_CREATE or here if not already added.
+        // Actually, let's clear and re-add to be sure.
+        while self.lst_logs.cols().count().expect("Count failed") > 0 {
+            unsafe {
+                let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::DeleteColumn { index: 0 });
+            }
+        }
+
+        self.lst_logs.cols().add("Horodatage", cw.get(0).copied().unwrap_or(150)).expect("Add col failed");
+        self.lst_logs.cols().add("Type de Paquet", cw.get(1).copied().unwrap_or(120)).expect("Add col failed");
+        self.lst_logs.cols().add("Serveur", cw.get(2).copied().unwrap_or(120)).expect("Add col failed");
+        self.lst_logs.cols().add("IP AP", cw.get(3).copied().unwrap_or(110)).expect("Add col failed");
+        self.lst_logs.cols().add("Nom AP", cw.get(4).copied().unwrap_or(150)).expect("Add col failed");
+        self.lst_logs.cols().add("MAC Client", cw.get(5).copied().unwrap_or(130)).expect("Add col failed");
+        self.lst_logs.cols().add("Utilisateur", cw.get(6).copied().unwrap_or(150)).expect("Add col failed");
+        self.lst_logs.cols().add("Résultat/Raison", cw.get(7).copied().unwrap_or(350)).expect("Add col failed");
+        self.lst_logs.cols().add("Session ID", cw.get(8).copied().unwrap_or(150)).expect("Add col failed");
+        
+        self.wnd.on().wm_close({
+            let me = self.clone();
+            move || {
+                let mut config_save = me.config.lock().expect("Lock failed");
+                let mut cw_v = Vec::new();
+                for i in 0..9 {
+                    unsafe {
+                        cw_v.push(me.lst_logs.hwnd().SendMessage(msg::lvm::GetColumnWidth { index: i as _ }).expect("Get column width failed") as i32);
+                    }
+                }
+                config_save.column_widths = cw_v;
+                
+                let rect = me.wnd.hwnd().GetWindowRect().expect("Get window rect failed");
+                config_save.window_width = rect.right - rect.left;
+                config_save.window_height = rect.bottom - rect.top;
+                
+                let _ = config_save.save();
+                winsafe::PostQuitMessage(0);
+                Ok(())
+            }
+        });
+
+        self.wnd.on().wm_create({
+            let me = self.clone();
+            move |_| {
+                if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).unwrap().LoadIcon(winsafe::IdIdiStr::Id(1)) {
+                     unsafe {
+                        let _ = me.wnd.hwnd().SendMessage(msg::wm::SetIcon { hicon: winsafe::HICON::from_ptr(hicon_guard.ptr()), size: co::ICON_SZ::BIG });
+                    }
+                }
+                Ok(0)
+            }
         });
         
-        let lbl = self.lbl_status.clone();
-        let all_it = self.all_items.clone();
-        let filt_id = self.filtered_ids.clone();
-        let raw_count = self.raw_count.clone();
-        let wnd = self.wnd.clone();
-        let lst = self.lst_logs.clone();
-
-        // --- CUSTOM MESSAGES ---
-        wnd.on().wm(WM_LOAD_DONE, {
-            let lst = lst;
-            let lbl = lbl.clone();
-            let all_it = all_it;
+        self.wnd.on().wm(WM_LOAD_DONE, {
+            let me = self.clone();
             move |_| {
-            let count = filt_id.lock().expect("Lock failed").len();
-            let total = all_it.lock().expect("Lock failed").len();
-            let raw = *raw_count.lock().expect("Lock failed");
-            lst.items().set_count(count.try_into().unwrap_or(u32::MAX), None).expect("Set count failed");
-            lbl.hwnd().SetWindowText(&format!("{raw} événements décodés en {total} sessions ({count} affichées).")).expect("Set text failed");
+                let count = me.filtered_ids.lock().expect("Lock failed").len();
+                let raw = me.raw_count.lock().expect("Lock failed");
+                me.lst_logs.items().set_count(count as _, None).expect("Set count failed");
+                let _ = me.lbl_status.hwnd().SetWindowText(&format!("Affichage : {count} sessions ({raw} événements bruts)."));
+                me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
                 Ok(0)
             }
         });
 
-        let lst_close = self.lst_logs.clone();
-        let wnd_close = self.wnd.clone();
-        self.wnd.on().wm_destroy(move || {
-            let mut cw = Vec::new();
-            for i in 0..8 {
-                cw.push(unsafe { lst_close.hwnd().SendMessage(msg::lvm::GetColumnWidth { index: i as _ }).unwrap() } as i32);
-            }
-            
-            let rect = wnd_close.hwnd().GetWindowRect().unwrap();
-            let width = rect.right - rect.left;
-            let height = rect.bottom - rect.top;
-            
-            let config = AppConfig {
-                window_width: width,
-                window_height: height,
-                column_widths: cw,
-            };
-            let _ = config.save();
-            Ok(())
-        });
-
-        wnd.on().wm(WM_LOAD_ERROR, {
-            let lbl = lbl;
+        self.wnd.on().wm(WM_LOAD_ERROR, {
+            let me = self.clone();
             move |_| {
-                lbl.hwnd().SetWindowText("Erreur lors du chargement.").unwrap();
+                let _ = me.lbl_status.hwnd().SetWindowText("Erreur lors du chargement.");
                 Ok(0)
             }
         });
 
         self.wnd.on().wm_size({
-            let lst_logs = self.lst_logs.clone();
-            let lbl_status = self.lbl_status.clone();
+            let me = self.clone();
             move |p| {
                 if p.request != co::SIZE_R::MINIMIZED {
-                    lst_logs.hwnd().SetWindowPos(
-                        winsafe::HwndPlace::Place(co::HWND_PLACE::TOP),
+                    let _ = me.lst_logs.hwnd().SetWindowPos(
+                        winsafe::HwndPlace::None,
                         winsafe::POINT { x: 10, y: 50 },
                         winsafe::SIZE { cx: p.client_area.cx - 20, cy: p.client_area.cy - 100 },
                         co::SWP::NOZORDER,
-                    ).unwrap();
+                    );
                     
-                    lbl_status.hwnd().SetWindowPos(
-                        winsafe::HwndPlace::Place(co::HWND_PLACE::TOP),
+                    let _ = me.lbl_status.hwnd().SetWindowPos(
+                        winsafe::HwndPlace::None,
                         winsafe::POINT { x: 10, y: p.client_area.cy - 30 },
                         winsafe::SIZE { cx: p.client_area.cx - 20, cy: 25 },
                         co::SWP::NOZORDER,
-                    ).unwrap();
+                    );
                 }
                 Ok(())
             }
@@ -360,443 +322,402 @@ impl MyWindow {
     }
 
     fn on_events(&self) {
-        let wnd = self.wnd.clone();
-        let lst = self.lst_logs.clone();
-        let txt = self.txt_search.clone();
-        let lbl = self.lbl_status.clone();
-        let all_it = self.all_items.clone();
-        let filt_id = self.filtered_ids.clone();
-        let raw_count = self.raw_count.clone();
-        let show_err = self.show_errors.clone();
-        let sort_c = self.sort_col.clone();
-        let sort_d = self.sort_desc.clone();
-        let cb_app = self.cb_append.clone();
-
-        // --- BUTTON: OPEN ---
-        let wnd_c = wnd.clone();
-        let _lst_c = lst.clone();
-        let lbl_c = lbl.clone();
-        let all_items_c = all_it.clone();
-        let filt_ids_c = filt_id.clone();
-        let raw_count_c = raw_count.clone();
-        let show_errors_c = show_err.clone();
-        let sort_col_c = sort_c.clone();
-        let sort_desc_c = sort_d.clone();
-        let txt_c = txt.clone();
-        let cb_app_c = cb_app.clone();
-
-        self.btn_open.on().bn_clicked(move || {
-            let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
-                &co::CLSID::FileOpenDialog,
-                None::<&winsafe::IUnknown>,
-                co::CLSCTX::INPROC_SERVER,
-            )?;
-            
-            file_dialog.SetFileTypes(&[("Log files", "*.log"), ("All files", "*.*")])?;
-            
-            if file_dialog.Show(wnd_c.hwnd())? {
-                let result = file_dialog.GetResult()?;
-                let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
-                
-                lbl_c.hwnd().SetWindowText("Chargement en cours...")?;
-                
-                let query = txt_c.text().unwrap_or_default();
-                let show_err_val = *show_errors_c.lock().expect("Lock failed");
-                let sort_c_val = *sort_col_c.lock().expect("Lock failed");
-                let sort_d_val = *sort_desc_c.lock().expect("Lock failed");
-
-                let all_items_bg = all_items_c.clone();
-                let raw_count_bg = raw_count_c.clone();
-                let filt_ids_bg = filt_ids_c.clone();
-                let is_append = cb_app_c.is_checked();
-
-                let hwnd_raw = wnd_c.hwnd().ptr() as usize;
-
-                thread::spawn(move || {
-                    let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
-                    match parse_full_logic(&path) {
-                        Ok((items, raw_total)) => {
-                            let mut all_guard = all_items_bg.lock().expect("Lock failed");
-                            if is_append {
-                                all_guard.extend(items);
-                            } else {
-                                *all_guard = items;
-                            }
-                            drop(all_guard);
-                            
-                            let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
-                            if is_append {
-                                *raw_guard += raw_total;
-                            } else {
-                                *raw_guard = raw_total;
-                            }
-                            drop(raw_guard);
-
-                            apply_filter_logic(
-                                &all_items_bg, 
-                                &filt_ids_bg, 
-                                &query, 
-                                show_err_val,
-                                sort_c_val,
-                                sort_d_val
-                            );
-                            
-                            unsafe {
-                                hwnd_bg.PostMessage(msg::WndMsg {
-                                    msg_id: WM_LOAD_DONE,
-                                    wparam: 0,
-                                    lparam: 0,
-                                }).expect("PostMessage failed");
-                            }
-                        }
-                        Err(e) => {
-                            let _err_msg = e.to_string();
-                            unsafe {
-                                hwnd_bg.PostMessage(msg::WndMsg {
-                                    msg_id: WM_LOAD_ERROR,
-                                    wparam: 0,
-                                    lparam: 0,
-                                }).unwrap();
-                            }
-                        }
-                    }
-                });
-            }
-            Ok(())
+        self.btn_open.on().bn_clicked({
+            let me = self.clone();
+            move || me.on_btn_open_clicked()
         });
 
-        // --- BUTTON: OPEN FOLDER ---
-        let wnd_c = wnd.clone();
-        let lbl_c = lbl.clone();
-        let all_items_c = all_it.clone();
-        let filt_ids_c = filt_id.clone();
-        let raw_count_c = raw_count;
-        let show_errors_c = show_err.clone();
-        let sort_col_c = sort_c.clone();
-        let sort_desc_c = sort_d.clone();
-        let txt_c = txt.clone();
-        let cb_app_c = cb_app;
+        self.btn_open_folder.on().bn_clicked({
+            let me = self.clone();
+            move || me.on_btn_open_folder_clicked()
+        });
 
-        self.btn_open_folder.on().bn_clicked(move || {
-            let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
-                &co::CLSID::FileOpenDialog,
-                None::<&winsafe::IUnknown>,
-                co::CLSCTX::INPROC_SERVER,
-            )?;
+        self.lst_logs.on().nm_r_click({
+            let me = self.clone();
+            move |_| me.on_lst_nm_r_click().map(|r| r as i32)
+        });
+
+        self.lst_logs.on().lvn_get_disp_info({
+            let me = self.clone();
+            move |p| me.on_lst_lvn_get_disp_info(p)
+        });
+
+        self.lst_logs.on().lvn_column_click({
+            let me = self.clone();
+            move |p| me.on_lst_lvn_column_click(p)
+        });
+
+        self.txt_search.on().en_change({
+            let me = self.clone();
+            move || me.on_txt_search_en_change()
+        });
+
+        self.btn_rejects.on().bn_clicked({
+            let me = self.clone();
+            move || me.on_btn_rejects_clicked()
+        });
+
+        self.btn_copy.on().bn_clicked({
+            let me = self.clone();
+            move || me.on_btn_copy_clicked()
+        });
+
+        self.lst_logs.on().nm_custom_draw({
+            let me = self.clone();
+            move |p| me.on_lst_nm_custom_draw(p)
+        });
+    }
+
+    fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
+        let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
+            &co::CLSID::FileOpenDialog,
+            None::<&winsafe::IUnknown>,
+            co::CLSCTX::INPROC_SERVER,
+        )?;
+        
+        file_dialog.SetFileTypes(&[("Log files", "*.log"), ("All files", "*.*")])?;
+        
+        if file_dialog.Show(self.wnd.hwnd())? {
+            let result = file_dialog.GetResult()?;
+            let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            file_dialog.SetOptions(file_dialog.GetOptions()? | co::FOS::PICKFOLDERS)?;
+            let _ = self.lbl_status.hwnd().SetWindowText("Chargement en cours...");
             
-            if file_dialog.Show(wnd_c.hwnd())? {
-                let result = file_dialog.GetResult()?;
-                let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
-                
-                lbl_c.hwnd().SetWindowText("Chargement du dossier...")?;
-                
-                let query = txt_c.text().unwrap_or_default();
-                let show_err_val = *show_errors_c.lock().expect("Lock failed");
-                let sort_c_val = *sort_col_c.lock().expect("Lock failed");
-                let sort_d_val = *sort_desc_c.lock().expect("Lock failed");
-                let is_append = cb_app_c.is_checked();
+            let query = self.txt_search.text().unwrap_or_default();
+            let show_err_val = *self.show_errors.lock().expect("Lock failed");
+            let sort_col_val = *self.sort_col.lock().expect("Lock failed");
+            let sort_desc_val = *self.sort_desc.lock().expect("Lock failed");
 
-                let all_items_bg = all_items_c.clone();
-                let raw_count_bg = raw_count_c.clone();
-                let filt_ids_bg = filt_ids_c.clone();
-                let hwnd_raw = wnd_c.hwnd().ptr() as usize;
+            let all_items_bg = self.all_items.clone();
+            let raw_count_bg = self.raw_count.clone();
+            let filt_ids_bg = self.filtered_ids.clone();
+            let is_append = self.cb_append.is_checked();
 
-                thread::spawn(move || {
-                    let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
-                    
-                    let mut files = Vec::new();
-                    if let Ok(entries) = fs::read_dir(&folder_path) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
-                                if let Ok(meta) = fs::metadata(&path) {
-                                    if let Ok(modified) = meta.modified() {
-                                        files.push((path, modified));
-                                    }
+            let hwnd_raw = self.wnd.hwnd().ptr() as usize;
+
+            thread::spawn(move || {
+                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                match parse_full_logic(&path) {
+                    Ok((items, raw_total)) => {
+                        let mut all_guard = all_items_bg.lock().expect("Lock failed");
+                        if is_append {
+                            all_guard.extend(items);
+                        } else {
+                            *all_guard = items;
+                        }
+                        drop(all_guard);
+                        
+                        let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
+                        if is_append {
+                            *raw_guard += raw_total;
+                        } else {
+                            *raw_guard = raw_total;
+                        }
+                        drop(raw_guard);
+
+                        apply_filter_logic(
+                            &all_items_bg, 
+                            &filt_ids_bg, 
+                            &query, 
+                            show_err_val,
+                            sort_col_val,
+                            sort_desc_val
+                        );
+                        
+                        unsafe {
+                            let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                                msg_id: WM_LOAD_DONE,
+                                wparam: 0,
+                                lparam: 0,
+                            });
+                        }
+                    }
+                    Err(_) => {
+                        unsafe {
+                            let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                                msg_id: WM_LOAD_ERROR,
+                                wparam: 0,
+                                lparam: 0,
+                            });
+                        }
+                    }
+                }
+            });
+        }
+        Ok(())
+    }
+
+    fn on_btn_open_folder_clicked(&self) -> winsafe::AnyResult<()> {
+        let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
+            &co::CLSID::FileOpenDialog,
+            None::<&winsafe::IUnknown>,
+            co::CLSCTX::INPROC_SERVER,
+        )?;
+        
+        file_dialog.SetOptions(file_dialog.GetOptions()? | co::FOS::PICKFOLDERS)?;
+        
+        if file_dialog.Show(self.wnd.hwnd())? {
+            let result = file_dialog.GetResult()?;
+            let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
+            
+            let _ = self.lbl_status.hwnd().SetWindowText("Chargement du dossier...");
+            
+            let query = self.txt_search.text().unwrap_or_default();
+            let show_err_val = *self.show_errors.lock().expect("Lock failed");
+            let sort_col_val = *self.sort_col.lock().expect("Lock failed");
+            let sort_desc_val = *self.sort_desc.lock().expect("Lock failed");
+            let is_append = self.cb_append.is_checked();
+
+            let all_items_bg = self.all_items.clone();
+            let raw_count_bg = self.raw_count.clone();
+            let filt_ids_bg = self.filtered_ids.clone();
+            let hwnd_raw = self.wnd.hwnd().ptr() as usize;
+
+            thread::spawn(move || {
+                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                
+                let mut files = Vec::new();
+                if let Ok(entries) = fs::read_dir(&folder_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
+                            if let Ok(meta) = fs::metadata(&path) {
+                                if let Ok(modified) = meta.modified() {
+                                    files.push((path, modified));
                                 }
                             }
                         }
                     }
-                    
-                    files.sort_by_key(|f| f.1); // Chronological sort by modification time
+                }
+                
+                files.sort_by_key(|f| f.1); 
 
-                    let mut total_items = Vec::new();
-                    let mut total_raw = 0;
-                    
-                    for (path, _) in files {
-                        if let Ok((items, raw)) = parse_full_logic(&path.to_string_lossy()) {
-                            total_items.extend(items);
-                            total_raw += raw;
-                        }
+                let mut total_items = Vec::new();
+                let mut total_raw = 0;
+                
+                for (path, _) in files {
+                    if let Ok((items, raw)) = parse_full_logic(&path.to_string_lossy()) {
+                        total_items.extend(items);
+                        total_raw += raw;
                     }
+                }
 
-                    let mut all_guard = all_items_bg.lock().expect("Lock failed");
-                    if is_append {
-                        all_guard.extend(total_items);
-                    } else {
-                        *all_guard = total_items;
+                let mut all_guard = all_items_bg.lock().expect("Lock failed");
+                if is_append {
+                    all_guard.extend(total_items);
+                } else {
+                    *all_guard = total_items;
+                }
+                drop(all_guard);
+
+                let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
+                if is_append {
+                    *raw_guard += total_raw;
+                } else {
+                    *raw_guard = total_raw;
+                }
+                drop(raw_guard);
+
+                apply_filter_logic(
+                    &all_items_bg, 
+                    &filt_ids_bg, 
+                    &query, 
+                    show_err_val,
+                    sort_col_val,
+                    sort_desc_val
+                );
+                
+                unsafe {
+                    let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                        msg_id: WM_LOAD_DONE,
+                        wparam: 0,
+                        lparam: 0,
+                    });
+                }
+            });
+        }
+        Ok(())
+    }
+
+    fn on_lst_nm_r_click(&self) -> winsafe::AnyResult<isize> {
+        let mut pt = winsafe::GetCursorPos().expect("GetCursorPos failed");
+        pt = self.lst_logs.hwnd().ScreenToClient(pt).expect("ScreenToClient failed");
+
+        let mut lvhti = winsafe::LVHITTESTINFO {
+            pt,
+            ..Default::default()
+        };
+
+        if unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::HitTest { info: &mut lvhti }).is_some() }
+            && lvhti.iItem != -1 {
+                let h_menu = winsafe::HMENU::CreatePopupMenu()?;
+                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str("📋 Copier la cellule"))?;
+                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str("🔍 Filtrer par cette valeur"))?;
+
+                let cursor_pos = winsafe::GetCursorPos().expect("GetCursorPos failed");
+                if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, cursor_pos, self.lst_logs.hwnd())? {
+                    let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
+                    match cmd_id as u16 {
+                        1001 => {
+                            let _ = clipboard_win::set_clipboard_string(&cell_text);
+                        },
+                        1002 => {
+                            let _ = self.txt_search.hwnd().SetWindowText(&cell_text);
+                            self.on_txt_search_en_change()?;
+                        },
+                        _ => {}
                     }
-                    drop(all_guard);
+                }
+        }
+        Ok(0)
+    }
 
-                    let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
-                    if is_append {
-                        *raw_guard += total_raw;
-                    } else {
-                        *raw_guard = total_raw;
-                    }
-                    drop(raw_guard);
+    fn on_lst_lvn_get_disp_info(&self, p: &winsafe::NMLVDISPINFO) -> winsafe::AnyResult<()> {
+        let items = self.all_items.lock().expect("Lock failed");
+        let filtered = self.filtered_ids.lock().expect("Lock failed");
+        
+        let item_idx = p.item.iItem;
+        if item_idx < 0 || item_idx >= filtered.len() as i32 { return Ok(()); }
 
-                    apply_filter_logic(
-                        &all_items_bg, 
-                        &filt_ids_bg, 
-                        &query, 
-                        show_err_val,
-                        sort_c_val,
-                        sort_d_val
-                    );
-                    
+        let real_idx = filtered[item_idx as usize];
+        let req = &items[real_idx];
+
+        let col_idx = p.item.iSubItem;
+        let text = match col_idx {
+            0 => &req.timestamp,
+            1 => &req.req_type,
+            2 => &req.server,
+            3 => &req.ap_ip,
+            4 => &req.ap_name,
+            5 => &req.mac,
+            6 => &req.user,
+            7 => if req.reason.is_empty() { &req.resp_type } else { &req.reason },
+            8 => &req.session_id,
+            _ => "",
+        };
+        let mut wstr = winsafe::WString::from_str(text);
+        let p_ptr = p as *const _ as *mut winsafe::NMLVDISPINFO;
+        unsafe {
+            (*p_ptr).item.set_pszText(Some(&mut wstr));
+        }
+        Ok(())
+    }
+
+    fn on_lst_lvn_column_click(&self, p: &winsafe::NMLISTVIEW) -> winsafe::AnyResult<()> {
+        let mut sort_col_g = self.sort_col.lock().expect("Lock failed");
+        let mut sort_desc_g = self.sort_desc.lock().expect("Lock failed");
+
+        let new_col = match p.iSubItem {
+            0 => SortColumn::Timestamp,
+            1 => SortColumn::Type,
+            2 => SortColumn::Server,
+            3 => SortColumn::ApIp,
+            4 => SortColumn::ApName,
+            5 => SortColumn::Mac,
+            6 => SortColumn::User,
+            7 => SortColumn::Reason,
+            8 => SortColumn::Timestamp, // Session ID, use timestamp for now
+            _ => return Ok(()),
+        };
+
+        if *sort_col_g == new_col {
+            *sort_desc_g = !*sort_desc_g;
+        } else {
+            *sort_col_g = new_col;
+            *sort_desc_g = false;
+        }
+        
+        let cur_query = self.txt_search.text().unwrap_or_default();
+        let cur_show_err = *self.show_errors.lock().expect("Lock failed");
+        let cur_sort_col = *sort_col_g;
+        let cur_sort_desc = *sort_desc_g;
+        
+        apply_filter_logic(
+            &self.all_items, 
+            &self.filtered_ids, 
+            &cur_query, 
+            cur_show_err,
+            cur_sort_col,
+            cur_sort_desc
+        );
+        self.lst_logs.items().set_count(self.filtered_ids.lock().expect("Lock failed").len() as _, None)?;
+        let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
+        Ok(())
+    }
+
+    fn on_txt_search_en_change(&self) -> winsafe::AnyResult<()> {
+        let query = self.txt_search.text().unwrap_or_default();
+        let show_err = *self.show_errors.lock().expect("Lock failed");
+        let sort_col_val = *self.sort_col.lock().expect("Lock failed");
+        let sort_desc_val = *self.sort_desc.lock().expect("Lock failed");
+
+        apply_filter_logic(
+            &self.all_items, 
+            &self.filtered_ids, 
+            &query, 
+            show_err,
+            sort_col_val,
+            sort_desc_val
+        );
+        self.lst_logs.items().set_count(self.filtered_ids.lock().expect("Lock failed").len() as _, None)?;
+        let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
+        Ok(())
+    }
+
+    fn on_btn_rejects_clicked(&self) -> winsafe::AnyResult<()> {
+        let mut show_err_g = self.show_errors.lock().expect("Lock failed");
+        *show_err_g = !*show_err_g;
+        let is_on = *show_err_g;
+        let _ = self.btn_rejects.hwnd().SetWindowText(if is_on { "⚠️ Tout afficher" } else { "⚠️ Erreurs" });
+        drop(show_err_g);
+        
+        let query = self.txt_search.text().unwrap_or_default();
+        let sort_col_v = *self.sort_col.lock().expect("Lock failed");
+        let sort_desc_v = *self.sort_desc.lock().expect("Lock failed");
+        
+        apply_filter_logic(
+            &self.all_items, 
+            &self.filtered_ids, 
+            &query, 
+            is_on,
+            sort_col_v,
+            sort_desc_v
+        );
+        self.lst_logs.items().set_count(self.filtered_ids.lock().expect("Lock failed").len() as _, None)?;
+        let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
+        Ok(())
+    }
+
+    fn on_btn_copy_clicked(&self) -> winsafe::AnyResult<()> {
+        if let Some(iitem) = self.lst_logs.items().iter_selected().next() {
+            let items = self.all_items.lock().expect("Lock failed");
+            let ids = self.filtered_ids.lock().expect("Lock failed");
+            if let Some(&idx) = ids.get(iitem.index() as usize) {
+                let tsv = items[idx].to_tsv();
+                let _ = clipboard_win::set_clipboard_string(&tsv);
+            }
+        }
+        Ok(())
+    }
+
+    fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> winsafe::AnyResult<co::CDRF> {
+        if p.mcd.dwDrawStage == co::CDDS::PREPAINT {
+            Ok(co::CDRF::NOTIFYITEMDRAW)
+        } else if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT {
+            let items = self.all_items.lock().expect("Lock failed");
+            let ids = self.filtered_ids.lock().expect("Lock failed");
+            if let Some(&idx) = ids.get(p.mcd.dwItemSpec) {
+                if let Some((r, g, b)) = items[idx].bg_color {
+                    let p_ptr = p as *const _ as *mut winsafe::NMLVCUSTOMDRAW;
                     unsafe {
-                        hwnd_bg.PostMessage(msg::WndMsg {
-                            msg_id: WM_LOAD_DONE,
-                            wparam: 0,
-                            lparam: 0,
-                        }).expect("PostMessage failed");
-                    }
-                });
-            }
-            Ok(())
-        });
-
-        // --- CONTEXT MENU: LST_LOGS ---
-        let lst_menu = self.lst_logs.clone();
-        let txt_menu = self.txt_search.clone();
-        let all_items_menu = all_it.clone();
-        let filt_ids_menu = filt_id.clone();
-        let show_errors_menu = show_err.clone();
-        let sort_col_menu = sort_c.clone();
-        let sort_desc_menu = sort_d.clone();
-        let lbl_menu = lbl.clone();
-
-        self.lst_logs.on().nm_r_click(move |_p| {
-            let mut pt = winsafe::GetCursorPos().unwrap();
-            pt = lst_menu.hwnd().ScreenToClient(pt).unwrap();
-
-            let mut lvhti = winsafe::LVHITTESTINFO::default();
-            lvhti.pt = pt;
-
-            if unsafe { lst_menu.hwnd().SendMessage(msg::lvm::HitTest { info: &mut lvhti }) }.is_some()
-                && lvhti.iItem != -1 {
-                    let h_menu = winsafe::HMENU::CreatePopupMenu()?;
-                    h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str("📋 Copier la cellule"))?;
-                    h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str("🔍 Filtrer par cette valeur"))?;
-
-                    let pos = winsafe::GetCursorPos().unwrap();
-                    let cmd = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, pos, lst_menu.hwnd())?;
-
-                    if let Some(cmd_id) = cmd {
-                        let text = lst_menu.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
-                        if cmd_id == 1001 {
-                            // Copy to clipboard
-                            let hclip = lst_menu.hwnd().OpenClipboard()?;
-                            hclip.EmptyClipboard()?;
-                            let wide = winsafe::WString::from_str(&text);
-                            let wide_slice = wide.as_slice();
-                            let bytes = unsafe {
-                                std::slice::from_raw_parts(
-                                    wide_slice.as_ptr().cast::<u8>(),
-                                    (wide_slice.len() + 1) * std::mem::size_of::<u16>(),
-                                )
-                            };
-                            hclip.SetClipboardData(co::CF::UNICODETEXT, bytes)?;
-                        } else if cmd_id == 1002 {
-                            // Filter by value
-                            txt_menu.set_text(&text)?;
-                            apply_filter_logic(
-                                &all_items_menu,
-                                &filt_ids_menu,
-                                &text,
-                                *show_errors_menu.lock().expect("Lock failed"),
-                                *sort_col_menu.lock().expect("Lock failed"),
-                                *sort_desc_menu.lock().expect("Lock failed")
-                            );
-                            let count = filt_ids_menu.lock().expect("Lock failed").len();
-                            lst_menu.items().set_count(count.try_into().unwrap_or(u32::MAX), None)?;
-                            lbl_menu.hwnd().SetWindowText(&format!("Affichage : {count} événements."))?;
-                        }
-                    }
-                }
-            Ok(0)
-        });
-
-        // --- SEARCH INPUT ---
-        let lst_search_c = lst.clone();
-        let lbl_search_c = lbl.clone();
-        let all_items_search_c = all_it.clone();
-        let filt_ids_search_c = filt_id.clone();
-        let txt_search_c = txt.clone();
-        let show_errors_search_c = show_err.clone();
-        let sort_col_search_c = sort_c.clone();
-        let sort_desc_search_c = sort_d.clone();
-
-        self.txt_search.on().en_change(move || {
-            apply_filter_logic(
-                &all_items_search_c, 
-                &filt_ids_search_c, 
-                &txt_search_c.text().unwrap_or_default(), 
-                *show_errors_search_c.lock().expect("Lock failed"), 
-                *sort_col_search_c.lock().expect("Lock failed"), 
-                *sort_desc_search_c.lock().expect("Lock failed")
-            );
-            let count = filt_ids_search_c.lock().expect("Lock failed").len();
-            lst_search_c.items().set_count(count.try_into().unwrap_or(u32::MAX), None).expect("Set count failed");
-            lbl_search_c.hwnd().SetWindowText(&format!("Affichage : {count} événements."))?;
-            Ok(())
-        });
-
-        // --- BUTTON: REJECTS ---
-        let btn_rejects_c = self.btn_rejects.clone();
-        let lst_rejects_c = lst.clone();
-        let txt_rejects_c = txt.clone();
-        let all_it_rejects_c = all_it.clone();
-        let filt_id_rejects_c = filt_id.clone();
-        let show_err_rejects_c = show_err.clone();
-        let sort_c_rejects_c = sort_c.clone();
-        let sort_d_rejects_c = sort_d.clone();
-
-        self.btn_rejects.on().bn_clicked(move || {
-            let mut guard = show_err_rejects_c.lock().unwrap();
-            *guard = !*guard;
-            let is_on = *guard;
-            btn_rejects_c.hwnd().SetWindowText(if is_on { "⚠️ Tout afficher" } else { "⚠️ Sessions échouées" })?;
-            drop(guard);
-
-            apply_filter_logic(
-                &all_it_rejects_c, 
-                &filt_id_rejects_c, 
-                &txt_rejects_c.text().unwrap_or_default(), 
-                is_on,
-                *sort_c_rejects_c.lock().unwrap(),
-                *sort_d_rejects_c.lock().unwrap()
-            );
-            lst_rejects_c.items().set_count(filt_id_rejects_c.lock().unwrap().len() as _, None)?;
-            Ok(())
-        });
-
-        // --- LIST VIEW: VIRTUAL DATA ---
-        let all_it_c = all_it.clone();
-        let filt_id_c = filt_id.clone();
-        self.lst_logs.on().lvn_get_disp_info(move |p| {
-            let items = all_it_c.lock().unwrap();
-            let ids = filt_id_c.lock().unwrap();
-            if let Some(&idx) = ids.get(p.item.iItem as usize) {
-                let item = &items[idx];
-                let val = match p.item.iSubItem {
-                    0 => &item.timestamp,
-                    1 => &item.req_type,
-                    2 => &item.server,
-                    3 => &item.ap_ip,
-                    4 => &item.ap_name,
-                    5 => &item.mac,
-                    6 => &item.user,
-                    7 => if item.reason.is_empty() { &item.resp_type } else { &item.reason },
-                    _ => "",
-                };
-                if p.item.mask.has(co::LVIF::TEXT) {
-                    let (ptr, len) = p.item.raw_pszText();
-                    if !ptr.is_null() && len > 0 {
-                        let wide = val.encode_utf16().collect::<Vec<_>>();
-                        let copy_len = wide.len().min(len as usize - 1);
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, copy_len);
-                            std::ptr::write(ptr.add(copy_len), 0);
-                        }
-                    }
-                }
-            }
-            Ok(())
-        });
-
-        // --- LIST VIEW: CUSTOM DRAW (Colors) ---
-        let all_it_c = all_it.clone();
-        let filt_id_c = filt_id.clone();
-        lst.on().nm_custom_draw(move |p| {
-            if p.mcd.dwDrawStage == co::CDDS::PREPAINT {
-                return Ok(co::CDRF::NOTIFYITEMDRAW);
-            } else if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT {
-                let items = all_it_c.lock().unwrap();
-                let ids = filt_id_c.lock().unwrap();
-                if let Some(&idx) = ids.get(p.mcd.dwItemSpec) {
-                    if let Some((r, g, b)) = items[idx].bg_color {
-                        p.clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
+                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
                     }
                 }
             }
             Ok(co::CDRF::DODEFAULT)
-        });
-
-        // --- LIST VIEW: SORTING ---
-        let lst_c = lst.clone();
-        let all_it_c = all_it.clone();
-        let filt_id_c = filt_id.clone();
-        let txt_c = txt;
-        let show_err_c = show_err;
-        let sort_c_c = sort_c;
-        let sort_d_c = sort_d;
-
-        lst.on().lvn_column_click(move |p| {
-            let col = match p.iSubItem {
-                0 => SortColumn::Timestamp,
-                1 => SortColumn::Type,
-                2 => SortColumn::Server,
-                3 => SortColumn::ApIp,
-                4 => SortColumn::ApName,
-                5 => SortColumn::Mac,
-                6 => SortColumn::User,
-                7 => SortColumn::Reason,
-                _ => return Ok(()),
-            };
-
-            let mut sc = sort_c_c.lock().unwrap();
-            let mut sd = sort_d_c.lock().unwrap();
-            if *sc == col {
-                *sd = !*sd;
-            } else {
-                *sc = col;
-                *sd = col == SortColumn::Timestamp;
-            }
-            let desc = *sd;
-            drop(sc);
-            drop(sd);
-
-            apply_filter_logic(&all_it_c, &filt_id_c, &txt_c.text().unwrap_or_default(), *show_err_c.lock().unwrap(), col, desc);
-            lst_c.items().set_count(filt_id_c.lock().unwrap().len() as _, None)?;
-            // Scroll to top by ensuring index 0 is visible
-            lst_c.items().get(0).ensure_visible()?;
-            Ok(())
-        });
-
-        // --- BUTTON: COPY ---
-        let lst_c = lst;
-        let all_it_c = all_it;
-        let filt_id_c = filt_id;
-        self.btn_copy.on().bn_clicked(move || {
-            if let Some(iitem) = lst_c.items().iter_selected().next() {
-                let items = all_it_c.lock().unwrap();
-                let ids = filt_id_c.lock().unwrap();
-                if let Some(&idx) = ids.get(iitem.index() as usize) {
-                    let tsv = items[idx].to_tsv();
-                    let hwnd = winsafe::HWND::GetDesktopWindow();
-                    let hclip = hwnd.OpenClipboard()?;
-                    hclip.EmptyClipboard()?;
-                    
-                    let bytes = tsv.as_bytes(); // SetClipboardData expects bytes
-                    hclip.SetClipboardData(co::CF::TEXT, bytes)?;
-                }
-            }
-            Ok(())
-        });
+        } else {
+            Ok(co::CDRF::DODEFAULT)
+        }
     }
 
     pub fn run(&self) -> winsafe::AnyResult<i32> {
@@ -864,7 +785,7 @@ fn apply_filter_logic(
         if sort_descending { ord.reverse() } else { ord }
     });
 
-    let mut filt_guard = filtered_ids.lock().unwrap();
+    let mut filt_guard = filtered_ids.lock().expect("Lock failed");
     *filt_guard = ids;
 }
 

@@ -20,6 +20,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 serde_json = "1.0.149"
+clipboard-win = "5.4.1"
 
 
 # Optimize for size while keeping debug info for crash reports
