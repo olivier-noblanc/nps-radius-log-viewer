@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(unsafe_code)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::significant_drop_tightening, clippy::nursery, clippy::pedantic, clippy::iter_kv_map)]
 
 use winsafe::prelude::*;
 use winsafe::{gui, co, msg};
@@ -154,7 +155,7 @@ impl LogColumn {
         ]
     }
 
-    fn ftl_key(&self) -> &'static str {
+    const fn ftl_key(self) -> &'static str {
         match self {
             Self::Timestamp => "col-timestamp",
             Self::Type => "col-type",
@@ -317,14 +318,15 @@ impl MyWindow {
                 for (i, &col) in visible.iter().enumerate() {
                     let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
                     unsafe {
-                        if let Ok(width) = me.lst_logs.hwnd().SendMessage(msg::lvm::GetColumnWidth { index: i as _ }) {
+                        if let Ok(width) = me.lst_logs.hwnd().SendMessage(msg::lvm::GetColumnWidth { index: i as u32 }) {
                             if col_idx < config_save.column_widths.len() {
                                 config_save.column_widths[col_idx] = width as i32;
                             }
                         }
                     }
                 }
-                config_save.visible_columns = visible.clone();
+                config_save.visible_columns.clone_from(&visible);
+                drop(visible);
                 
                 let rect = me.wnd.hwnd().GetClientRect().expect("Get window rect failed");
                 config_save.window_width = rect.right;
@@ -339,7 +341,7 @@ impl MyWindow {
         self.wnd.on().wm_create({
             let me = self.clone();
             move |_| {
-                if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).unwrap().LoadIcon(winsafe::IdIdiStr::Id(1)) {
+                if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).expect("Failed to get module handle").LoadIcon(winsafe::IdIdiStr::Id(1)) {
                      unsafe {
                         let _ = me.wnd.hwnd().SendMessage(msg::wm::SetIcon { hicon: winsafe::HICON::from_ptr(hicon_guard.ptr()), size: co::ICON_SZ::BIG });
                     }
@@ -369,12 +371,11 @@ impl MyWindow {
                 }
                 
                 let count = me.filtered_ids.lock().expect("Lock failed").len();
-                let raw = me.raw_count.lock().expect("Lock failed");
-                me.lst_logs.items().set_count(count as _, None).expect("Set count failed");
+                let raw_str = me.raw_count.lock().expect("Lock failed").to_string();
+                me.lst_logs.items().set_count(count as u32, None).expect("Set count failed");
                 
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let count_str = count.to_string();
-                let raw_str = raw.to_string();
                 
                 let status_fmt = clean_tr(&loader.get("ui-status-display"))
                     .replace("{ $count }", &count_str)
@@ -723,7 +724,7 @@ impl MyWindow {
     }
 
     fn toggle_column_visibility(&self, col: LogColumn) {
-        println!("Toggling column visibility: {:?}", col);
+        println!("Toggling column visibility: {col:?}");
         let mut visible = self.visible_cols.lock().expect("Lock failed");
         if visible.contains(&col) {
             if visible.len() > 1 { 
@@ -732,7 +733,7 @@ impl MyWindow {
         } else {
             let all_cols = LogColumn::all();
             let mut new_visible = Vec::new();
-            for &c in all_cols.iter() {
+            for &c in &all_cols {
                 if visible.contains(&c) || c == col {
                     new_visible.push(c);
                 }
@@ -744,34 +745,51 @@ impl MyWindow {
         let _ = self.on_txt_search_en_change();
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn on_lst_lvn_get_disp_info(&self, p: &winsafe::NMLVDISPINFO) -> winsafe::AnyResult<()> {
-        let items = self.all_items.lock().expect("Lock failed");
-        let filtered = self.filtered_ids.lock().expect("Lock failed");
-        let visible = self.visible_cols.lock().expect("Lock failed");
-        
         let item_idx = p.item.iItem;
-        if item_idx < 0 || item_idx >= filtered.len() as i32 { return Ok(()); }
-
-        let real_idx = filtered[item_idx as usize];
-        let req = &items[real_idx];
-
-        let col_idx = p.item.iSubItem;
-        let log_col = if let Some(&c) = visible.get(col_idx as usize) {
-            c
-        } else {
-            return Ok(());
+        let real_idx = {
+            let filtered = self.filtered_ids.lock().expect("Lock failed");
+            if item_idx < 0 || item_idx >= filtered.len() as i32 { return Ok(()); }
+            filtered[item_idx as usize]
         };
 
+        let log_col = {
+            let visible = self.visible_cols.lock().expect("Lock failed");
+            let col_idx = p.item.iSubItem;
+            let Some(&c) = visible.get(col_idx as usize) else { return Ok(()); };
+            c
+        };
+
+        let items = self.all_items.lock().expect("Lock failed");
+        let req = &items[real_idx];
+
         let text = match log_col {
-            LogColumn::Timestamp => &req.timestamp,
-            LogColumn::Type => &req.req_type,
-            LogColumn::Server => &req.server,
-            LogColumn::ApIp => &req.ap_ip,
-            LogColumn::ApName => &req.ap_name,
-            LogColumn::Mac => &req.mac,
-            LogColumn::User => &req.user,
-            LogColumn::Reason => if req.reason.is_empty() { &req.resp_type } else { &req.reason },
-            LogColumn::Session => &req.session_id,
+            LogColumn::Timestamp => req.timestamp.clone(),
+            LogColumn::Type => req.req_type.clone(),
+            LogColumn::Server => req.server.clone(),
+            LogColumn::ApIp => req.ap_ip.clone(),
+            LogColumn::ApName => req.ap_name.clone(),
+            LogColumn::Mac => req.mac.clone(),
+            LogColumn::User => req.user.clone(),
+            LogColumn::Reason => {
+                use std::cell::RefCell;
+                thread_local! {
+                    static REASON_CACHE: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
+                }
+                
+                REASON_CACHE.with(|cache| {
+                    let mut cache = cache.borrow_mut();
+                    if let Some(val) = cache.get(&req.reason) {
+                        val.clone()
+                    } else {
+                        let val = map_reason(&req.reason);
+                        cache.insert(req.reason.clone(), val.clone());
+                        val
+                    }
+                })
+            }
+            LogColumn::Session => req.session_id.clone(),
         };
 
         use std::cell::RefCell;
@@ -791,14 +809,13 @@ impl MyWindow {
         Ok(())
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn on_lst_lvn_column_click(&self, p: &winsafe::NMLISTVIEW) -> winsafe::AnyResult<()> {
         let mut sort_col_g = self.sort_col.lock().expect("Lock failed");
         let mut sort_desc_g = self.sort_desc.lock().expect("Lock failed");
 
         let visible = self.visible_cols.lock().expect("Lock failed");
-        let new_col = if let Some(&col) = visible.get(p.iSubItem as usize) {
-            col
-        } else {
+        let Some(&new_col) = visible.get(p.iSubItem as usize) else {
             return Ok(());
         };
         drop(visible);
@@ -873,7 +890,8 @@ impl MyWindow {
         Ok(())
     }
 
-    fn on_btn_copy_clicked(&self) {
+    #[allow(clippy::unnecessary_wraps)]
+    fn on_btn_copy_clicked(&self) -> winsafe::AnyResult<()> {
         if let Some(iitem) = self.lst_logs.items().iter_selected().next() {
             let items = self.all_items.lock().expect("Lock failed");
             let ids = self.filtered_ids.lock().expect("Lock failed");
@@ -882,23 +900,24 @@ impl MyWindow {
                 let _ = clipboard_win::set_clipboard_string(&tsv);
             }
         }
+        Ok(())
     }
 
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
             co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
-            _ if p.mcd.dwDrawStage == (co::CDDS::ITEMPREPAINT | co::CDDS::SUBITEM) => {
+            _ if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT | co::CDDS::SUBITEM => {
                 let color = {
                     let items = self.all_items.lock().expect("Lock failed");
                     let ids = self.filtered_ids.lock().expect("Lock failed");
                     ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
                 };
                 
-                if let Some((r, g, b)) = color {
+                if let Some(clr) = color {
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
-                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
+                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
                         (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
                     }
                 }
@@ -920,16 +939,17 @@ impl MyWindow {
         }
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         let visible = self.visible_cols.lock().expect("Lock failed").clone();
-        let config = self.config.lock().expect("Lock failed");
         let all_cols = LogColumn::all();
         
-        for &col in &visible {
-            let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
-            let width = config.column_widths.get(col_idx).copied().filter(|&w| w > 0).unwrap_or(150);
-            let text = clean_tr(&loader.get(col.ftl_key()));
-            self.lst_logs.cols().add(&text, width).expect("Add col failed");
+        {
+            let config = self.config.lock().expect("Lock failed");
+            for &col in &visible {
+                let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
+                let width = config.column_widths.get(col_idx).copied().filter(|&w| w > 0).unwrap_or(150);
+                let text = clean_tr(&loader.get(col.ftl_key()));
+                self.lst_logs.cols().add(&text, width).expect("Add col failed");
+            }
         }
-        drop(config);
         let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
     }
 }
