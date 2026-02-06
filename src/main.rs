@@ -423,7 +423,7 @@ impl MyWindow {
             move |p| {
                 let h_header = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
                 if p.hwnd == *me.lst_logs.hwnd() || p.hwnd == h_header {
-                    me.on_lst_context_menu(p.cursor_pos)?;
+                    me.on_lst_context_menu(p.cursor_pos, p.hwnd)?;
                 }
                 Ok(())
             }
@@ -659,7 +659,14 @@ impl MyWindow {
         Ok(())
     }
 
-    fn on_lst_context_menu(&self, pt_screen: winsafe::POINT) -> winsafe::AnyResult<()> {
+    fn on_lst_context_menu(&self, pt_screen: winsafe::POINT, target_hwnd: winsafe::HWND) -> winsafe::AnyResult<()> {
+        let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
+        
+        if target_hwnd == h_header {
+            self.show_column_context_menu()?;
+            return Ok(());
+        }
+
         let pt_client = self.lst_logs.hwnd().ScreenToClient(pt_screen).expect("ScreenToClient failed");
 
         let mut lvhti = winsafe::LVHITTESTINFO {
@@ -687,12 +694,9 @@ impl MyWindow {
                     }
                 }
         } else {
-            // Header check
-            let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.expect("Get header failed");
-            let rect = h_header.GetWindowRect().expect("Get header rect failed");
-            if pt_screen.x >= rect.left && pt_screen.x <= rect.right && pt_screen.y >= rect.top && pt_screen.y <= rect.bottom {
-                self.show_column_context_menu()?;
-            }
+            // Background of listview, still show column menu? 
+            // Better UX to show it if not on an item
+            self.show_column_context_menu()?;
         }
         Ok(())
     }
@@ -909,7 +913,26 @@ impl MyWindow {
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
-            co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
+            co::CDDS::ITEMPREPAINT => {
+                let color = {
+                    let items = self.all_items.lock().expect("Lock failed");
+                    let ids = self.filtered_ids.lock().expect("Lock failed");
+                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
+                };
+                if let Some(clr) = color {
+                    let p_ptr = std::ptr::from_ref(p).cast_mut();
+                    let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                    unsafe {
+                        (*p_ptr).clrTextBk = color_ref;
+                        (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
+                        let _ = p.mcd.hdc.SetBkColor(color_ref);
+                        let _ = p.mcd.hdc.SetTextColor(winsafe::COLORREF::from_rgb(0, 0, 0));
+                    }
+                    unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
+                } else {
+                    co::CDRF::NOTIFYSUBITEMDRAW
+                }
+            },
             _ if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT | co::CDDS::SUBITEM => {
                 let color = {
                     let items = self.all_items.lock().expect("Lock failed");
@@ -923,7 +946,6 @@ impl MyWindow {
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
                         (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
-                        // Force DC background color as well for some virtualized drivers
                         let _ = p.mcd.hdc.SetBkColor(color_ref);
                         let _ = p.mcd.hdc.SetTextColor(winsafe::COLORREF::from_rgb(0, 0, 0));
                     }
