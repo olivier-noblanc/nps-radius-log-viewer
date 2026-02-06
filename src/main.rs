@@ -414,9 +414,15 @@ impl MyWindow {
             move || me.on_btn_open_folder_clicked()
         });
 
-        self.lst_logs.on().nm_r_click({
+        self.wnd.on().wm_context_menu({
             let me = self.clone();
-            move |_| me.on_lst_nm_r_click().map(|r| r as i32)
+            move |p| {
+                let h_header = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
+                if p.hwnd == *me.lst_logs.hwnd() || p.hwnd == h_header {
+                    me.on_lst_context_menu(p.cursor_pos)?;
+                }
+                Ok(())
+            }
         });
 
         self.lst_logs.on().lvn_get_disp_info({
@@ -649,29 +655,26 @@ impl MyWindow {
         Ok(())
     }
 
-    fn on_lst_nm_r_click(&self) -> winsafe::AnyResult<isize> {
-        let mut pt = winsafe::GetCursorPos().expect("GetCursorPos failed");
-        pt = self.lst_logs.hwnd().ScreenToClient(pt).expect("ScreenToClient failed");
+    fn on_lst_context_menu(&self, pt_screen: winsafe::POINT) -> winsafe::AnyResult<()> {
+        let pt_client = self.lst_logs.hwnd().ScreenToClient(pt_screen).expect("ScreenToClient failed");
 
         let mut lvhti = winsafe::LVHITTESTINFO {
-            pt,
+            pt: pt_client,
             ..Default::default()
         };
 
         if unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::HitTest { info: &mut lvhti }).is_some() }
             && lvhti.iItem != -1 {
+                // Cell menu
                 let h_menu = winsafe::HMENU::CreatePopupMenu()?;
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str(&loader.get("ui-menu-copy-cell")))?;
-                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str(&loader.get("ui-menu-filter-cell")))?;
+                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str(&clean_tr(&loader.get("ui-menu-copy-cell"))))?;
+                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str(&clean_tr(&loader.get("ui-menu-filter-cell"))))?;
 
-                let cursor_pos = winsafe::GetCursorPos().expect("GetCursorPos failed");
-                if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, cursor_pos, self.lst_logs.hwnd())? {
+                if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, pt_screen, self.lst_logs.hwnd())? {
                     let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
                     match cmd_id {
-                        1001 => {
-                            let _ = clipboard_win::set_clipboard_string(&cell_text);
-                        },
+                        1001 => { let _ = clipboard_win::set_clipboard_string(&cell_text); },
                         1002 => {
                             let _ = self.txt_search.hwnd().SetWindowText(&cell_text);
                             self.on_txt_search_en_change()?;
@@ -680,30 +683,32 @@ impl MyWindow {
                     }
                 }
         } else {
-            // Check if it's on header
+            // Header check
             let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.expect("Get header failed");
             let rect = h_header.GetWindowRect().expect("Get header rect failed");
-            let pt_screen = winsafe::GetCursorPos().expect("Get cursor pos failed");
             if pt_screen.x >= rect.left && pt_screen.x <= rect.right && pt_screen.y >= rect.top && pt_screen.y <= rect.bottom {
-                return self.show_column_context_menu();
+                self.show_column_context_menu()?;
             }
         }
-        Ok(0)
+        Ok(())
     }
 
     fn show_column_context_menu(&self) -> winsafe::AnyResult<isize> {
         let h_menu = winsafe::HMENU::CreatePopupMenu()?;
-        let visible = self.visible_cols.lock().expect("Lock failed");
         let all_cols = LogColumn::all();
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        
+        // Clone visible list and release lock immediately to avoid deadlocks while menu is open
+        let visible_now = self.visible_cols.lock().expect("Lock failed").clone();
 
         for (i, col) in all_cols.iter().enumerate() {
-            let is_visible = visible.contains(col);
+            let is_visible = visible_now.contains(col);
             let mut flags = co::MF::STRING;
             if is_visible {
                 flags |= co::MF::CHECKED;
             }
-            h_menu.AppendMenu(flags, winsafe::IdMenu::Id(2000 + i as u16), winsafe::BmpPtrStr::from_str(&loader.get(col.ftl_key())))?;
+            let text = clean_tr(&loader.get(col.ftl_key()));
+            h_menu.AppendMenu(flags, winsafe::IdMenu::Id(2000 + i as u16), winsafe::BmpPtrStr::from_str(&text))?;
         }
 
         let pt = winsafe::GetCursorPos().expect("GetCursorPos failed");
@@ -711,7 +716,6 @@ impl MyWindow {
             let col_idx = (cmd_id - 2000) as usize;
             if col_idx < all_cols.len() {
                 let clicked_col = all_cols[col_idx];
-                drop(visible); // Unlock
                 self.toggle_column_visibility(clicked_col);
             }
         }
@@ -719,6 +723,7 @@ impl MyWindow {
     }
 
     fn toggle_column_visibility(&self, col: LogColumn) {
+        println!("Toggling column visibility: {:?}", col);
         let mut visible = self.visible_cols.lock().expect("Lock failed");
         if visible.contains(&col) {
             if visible.len() > 1 { 
@@ -926,6 +931,7 @@ impl MyWindow {
             self.lst_logs.cols().add(&text, width).expect("Add col failed");
         }
         drop(config);
+        let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
     }
 }
 
@@ -1102,7 +1108,7 @@ fn clean_tr(s: &str) -> String {
 }
 
 fn main() {
-    let mut loader: FluentLanguageLoader = fluent_language_loader!();
+    let loader: FluentLanguageLoader = fluent_language_loader!();
     loader.set_use_isolating(false);
     
     // Choose requested languages based on system locale
