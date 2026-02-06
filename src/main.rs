@@ -106,10 +106,17 @@ impl AppConfig {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        // Safety clamp: If dimensions are excessively large (due to previous bug), reset them.
-        if cfg.window_width > 3000 || cfg.window_height > 2000 {
-            cfg.window_width = 1100;
-            cfg.window_height = 700;
+        // Screen-aware safety clamp
+        let screen_cx = winsafe::GetSystemMetrics(co::SM::CXSCREEN);
+        let screen_cy = winsafe::GetSystemMetrics(co::SM::CYSCREEN);
+
+        // If dimensions are missing or excessively large (larger than the screen or previous bug)
+        // Adjust to a reasonable maximum (90% of screen)
+        if cfg.window_width <= 0 || cfg.window_width > screen_cx {
+            cfg.window_width = (screen_cx * 9 / 10).max(800);
+        }
+        if cfg.window_height <= 0 || cfg.window_height > screen_cy {
+            cfg.window_height = (screen_cy * 9 / 10).max(600);
         }
         cfg
     }
