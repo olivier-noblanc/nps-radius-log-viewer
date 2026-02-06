@@ -353,8 +353,9 @@ impl MyWindow {
                         mask: co::LVS_EX::FULLROWSELECT,
                         style: co::LVS_EX::FULLROWSELECT,
                     });
-                    // Force Explorer theme to ensure CustomDraw is respected on all systems
-                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("Explorer", None);
+                    // Disable Explorer theme: some virtualized drivers/performance modes 
+                    // only respect CustomDraw in classic mode.
+                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
                 }
                 
                 // Initializing columns dynamically
@@ -1116,14 +1117,20 @@ fn map_packet_type(code: &str) -> String {
     let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
     let key = format!("radius-packet-types-{code}");
     let val = loader.get(&key);
-    if val == key || val.contains("localization") { code.to_string() } else { val }
+    // Case-insensitive check for common missing localization signals
+    if val == key || val.to_lowercase().contains("localization") { 
+        code.to_string() 
+    } else { 
+        val 
+    }
 }
 
 fn map_reason(code: &str) -> String {
     let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
     let key = format!("nps-reasons-{code}");
     let val = loader.get(&key);
-    if val == key || val.contains("localization") { 
+    // Case-insensitive check for common missing localization signals
+    if val == key || val.to_lowercase().contains("localization") { 
         clean_tr(&loader.get("ui-map-code"))
             .replace("{ $code }", code)
             .replace("{$code}", code)

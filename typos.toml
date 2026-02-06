@@ -1,10 +1,5 @@
 [default.extend-words]
-Projet = "Projet"
-Construit = "Construit"
-sur = "sur"
-projet = "projet"
-Informe = "Informe"
 asInvoker = "asInvoker"
 
 [files]
-extend-exclude = ["patches/**/*"]
+extend-exclude = ["patches/**/*", "i18n/**/*.ftl"]
