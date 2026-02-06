@@ -230,7 +230,7 @@ impl MyWindow {
             wnd: wnd.clone(),
             lst_logs:     gui::ListView::new(&wnd, gui::ListViewOpts {
                 position: (10, 50),
-                size: (config.window_width - 20, config.window_height - 90),
+                size: (config.window_width - 20, config.window_height - 120),
                 control_style: co::LVS::REPORT | co::LVS::NOSORTHEADER | co::LVS::SHOWSELALWAYS | co::LVS::OWNERDATA,
                 resize_behavior: (gui::Horz::Resize, gui::Vert::Resize),
                 ..Default::default()
@@ -276,14 +276,15 @@ impl MyWindow {
                 ..Default::default()
             }),
             lbl_status:   gui::Label::new(&wnd, gui::LabelOpts {
-                position: (10, config.window_height - 35),
+                position: (10, config.window_height - 85),
                 size: (config.window_width - 20, 20),
                 resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
                 ..Default::default()
             }),
             progress:     gui::ProgressBar::new(&wnd, gui::ProgressBarOpts {
-                position: (0, config.window_height - 10),
-                size: (config.window_width, 10),
+                position: (10, config.window_height - 60),
+                size: (config.window_width - 20, 20),
+                window_style: co::WS::CHILD | co::WS::VISIBLE | co::WS::BORDER,
                 control_style: co::PBS::MARQUEE,
                 resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
                 ..Default::default()
