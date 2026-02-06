@@ -6,10 +6,23 @@ use winsafe::{gui, co, msg};
 use quick_xml::de::from_str;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::fs;
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::thread;
+
+// --- Internationalization ---
+use i18n_embed::{
+    fluent::{fluent_language_loader, FluentLanguageLoader},
+    DesktopLanguageRequester,
+};
+use rust_embed::RustEmbed;
+
+#[derive(RustEmbed)]
+#[folder = "i18n/"]
+struct Localizations;
+
+static LANGUAGE_LOADER: OnceLock<FluentLanguageLoader> = OnceLock::new();
 
 const WM_LOAD_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 1) };
 const WM_LOAD_ERROR: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 2) };
@@ -76,9 +89,9 @@ struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            window_width: 1200,
-            window_height: 800,
-            column_widths: vec![150, 120, 120, 110, 150, 130, 150, 350],
+            window_width: 900,
+            window_height: 550,
+            column_widths: vec![150, 120, 120, 110, 150, 130, 150, 350, 150],
         }
     }
 }
@@ -123,6 +136,31 @@ enum SortColumn {
     Timestamp, Type, Server, ApIp, ApName, Mac, User, Reason
 }
 
+// --- FFI for SetCursor (missing in winsafe 0.0.27) ---
+extern "system" {
+    fn SetCursor(hcursor: winsafe::HCURSOR) -> winsafe::HCURSOR;
+}
+
+/// RAII helper to show wait cursor.
+struct BusyCursor;
+
+impl BusyCursor {
+    fn new() -> Self {
+        if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
+            unsafe { SetCursor(hcursor.raw_copy()); }
+        }
+        Self
+    }
+}
+
+impl Drop for BusyCursor {
+    fn drop(&mut self) {
+        if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
+            unsafe { SetCursor(hcursor.raw_copy()); }
+        }
+    }
+}
+
 // --- UI Application ---
 
 #[derive(Clone)]
@@ -144,106 +182,96 @@ struct MyWindow {
     sort_col:     Arc<Mutex<SortColumn>>,
     sort_desc:    Arc<Mutex<bool>>,
     config:       Arc<Mutex<AppConfig>>,
+    is_busy:      Arc<Mutex<bool>>,
 }
 
 impl MyWindow {
     pub fn new() -> Self {
         let config = AppConfig::load();
         
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         let wnd = gui::WindowMain::new(
             gui::WindowMainOpts {
-                title: "RADIUS Log Browser - WinSafe Edition",
+                title: &format!("{} - WinSafe Edition", loader.get("ui-title")),
                 class_icon: gui::Icon::Id(1),
                 size: (config.window_width, config.window_height),
-                style: co::WS::OVERLAPPEDWINDOW,
+                style: co::WS::CAPTION | co::WS::SYSMENU | co::WS::MINIMIZEBOX | co::WS::MAXIMIZEBOX | co::WS::SIZEBOX | co::WS::VISIBLE | co::WS::CLIPCHILDREN,
                 ..Default::default()
             },
         );
 
         let new_self = Self {
             wnd: wnd.clone(),
-            lst_logs:     gui::ListView::new(&wnd, gui::ListViewOpts { ..Default::default() }),
-            txt_search:   gui::Edit::new(&wnd, gui::EditOpts { ..Default::default() }),
-            btn_open:     gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
-            btn_open_folder: gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
-            btn_rejects:  gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
-            cb_append:    gui::CheckBox::new(&wnd, gui::CheckBoxOpts { ..Default::default() }),
-            btn_copy:     gui::Button::new(&wnd, gui::ButtonOpts { ..Default::default() }),
-            lbl_status:   gui::Label::new(&wnd, gui::LabelOpts { ..Default::default() }),
+            lst_logs:     gui::ListView::new(&wnd, gui::ListViewOpts {
+                position: (10, 50),
+                size: (config.window_width - 20, config.window_height - 90),
+                control_style: co::LVS::REPORT | co::LVS::NOSORTHEADER | co::LVS::SHOWSELALWAYS | co::LVS::OWNERDATA,
+                resize_behavior: (gui::Horz::Resize, gui::Vert::Resize),
+                ..Default::default()
+            }),
+            txt_search:   gui::Edit::new(&wnd, gui::EditOpts {
+                position: (400, 14),
+                width: 150,
+                height: 22,
+                ..Default::default()
+            }),
+            btn_open:     gui::Button::new(&wnd, gui::ButtonOpts {
+                text: &loader.get("ui-open-log"),
+                position: (10, 10),
+                width: 120,
+                height: 30,
+                ..Default::default()
+            }),
+            btn_open_folder: gui::Button::new(&wnd, gui::ButtonOpts {
+                text: &loader.get("ui-folder"),
+                position: (140, 10),
+                width: 120,
+                height: 30,
+                ..Default::default()
+            }),
+            btn_rejects:  gui::Button::new(&wnd, gui::ButtonOpts {
+                text: &loader.get("ui-errors"),
+                position: (270, 10),
+                width: 120,
+                height: 30,
+                ..Default::default()
+            }),
+            cb_append:    gui::CheckBox::new(&wnd, gui::CheckBoxOpts {
+                text: &loader.get("ui-append"),
+                position: (560, 14),
+                size: (80, 20),
+                ..Default::default()
+            }),
+            btn_copy:     gui::Button::new(&wnd, gui::ButtonOpts {
+                text: &loader.get("ui-copy"),
+                position: (650, 10),
+                width: 100,
+                height: 30,
+                ..Default::default()
+            }),
+            lbl_status:   gui::Label::new(&wnd, gui::LabelOpts {
+                text: &loader.get("ui-status-ready"),
+                position: (10, config.window_height - 30),
+                size: (400, 20),
+                resize_behavior: (gui::Horz::None, gui::Vert::Repos),
+                ..Default::default()
+            }),
             all_items:    Arc::new(Mutex::new(Vec::new())),
             raw_count:    Arc::new(Mutex::new(0)),
             filtered_ids: Arc::new(Mutex::new(Vec::new())),
             show_errors:  Arc::new(Mutex::new(false)),
             sort_col:     Arc::new(Mutex::new(SortColumn::Timestamp)),
             sort_desc:    Arc::new(Mutex::new(true)),
-            config:       Arc::new(Mutex::new(config.clone())),
+            config:       Arc::new(Mutex::new(config)),
+            is_busy:      Arc::new(Mutex::new(false)),
         };
 
-        new_self.setup_widgets(&config);
-        new_self.on_init();
+        new_self.on_wm_events();
         new_self.on_events();
         new_self
     }
 
-    fn setup_widgets(&self, _config: &AppConfig) {
-        let _ = self.btn_open.hwnd().SetWindowText("📂 Ouvrir Log");
-        self.btn_open.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 10, y: 10 }, winsafe::SIZE { cx: 120, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
-
-        let _ = self.btn_open_folder.hwnd().SetWindowText("📂 Dossier");
-        self.btn_open_folder.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 140, y: 10 }, winsafe::SIZE { cx: 120, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
-
-        let _ = self.btn_rejects.hwnd().SetWindowText("⚠️ Erreurs");
-        self.btn_rejects.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 270, y: 10 }, winsafe::SIZE { cx: 120, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
-
-        self.txt_search.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 400, y: 14 }, winsafe::SIZE { cx: 200, cy: 22 }, co::SWP::NOZORDER).expect("Pos failed");
-
-        let _ = self.cb_append.hwnd().SetWindowText("Append");
-        self.cb_append.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 610, y: 14 }, winsafe::SIZE { cx: 80, cy: 20 }, co::SWP::NOZORDER).expect("Pos failed");
-
-        let _ = self.btn_copy.hwnd().SetWindowText("📋 Copier");
-        self.btn_copy.hwnd().SetWindowPos(winsafe::HwndPlace::None, winsafe::POINT { x: 700, y: 10 }, winsafe::SIZE { cx: 100, cy: 30 }, co::SWP::NOZORDER).expect("Pos failed");
-
-        // Extended styles for ListView
-        unsafe {
-            self.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
-                mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
-                style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
-            });
-        }
-
-        let _ = self.lbl_status.hwnd().SetWindowText("Prêt. Ouvrez un fichier log.");
-    }
-
-    fn on_init(&self) {
-        let config_init = self.config.lock().expect("Lock failed");
-        
-        for (i, &w) in config_init.column_widths.iter().enumerate() {
-            self.lst_logs.cols().add("", w as _).expect("Add column failed");
-            if i == 8 { break; } 
-        }
-        
-        let _cols = self.lst_logs.cols();
-        let cw = &config_init.column_widths;
-        
-        // Titles are added during the first add or via LVM_SETCOLUMN
-        // For simplicity, let's just use the Titles in cols().add in a WM_CREATE or here if not already added.
-        // Actually, let's clear and re-add to be sure.
-        while self.lst_logs.cols().count().expect("Count failed") > 0 {
-            unsafe {
-                let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::DeleteColumn { index: 0 });
-            }
-        }
-
-        self.lst_logs.cols().add("Horodatage", cw.get(0).copied().unwrap_or(150)).expect("Add col failed");
-        self.lst_logs.cols().add("Type de Paquet", cw.get(1).copied().unwrap_or(120)).expect("Add col failed");
-        self.lst_logs.cols().add("Serveur", cw.get(2).copied().unwrap_or(120)).expect("Add col failed");
-        self.lst_logs.cols().add("IP AP", cw.get(3).copied().unwrap_or(110)).expect("Add col failed");
-        self.lst_logs.cols().add("Nom AP", cw.get(4).copied().unwrap_or(150)).expect("Add col failed");
-        self.lst_logs.cols().add("MAC Client", cw.get(5).copied().unwrap_or(130)).expect("Add col failed");
-        self.lst_logs.cols().add("Utilisateur", cw.get(6).copied().unwrap_or(150)).expect("Add col failed");
-        self.lst_logs.cols().add("Résultat/Raison", cw.get(7).copied().unwrap_or(350)).expect("Add col failed");
-        self.lst_logs.cols().add("Session ID", cw.get(8).copied().unwrap_or(150)).expect("Add col failed");
-        
+    fn on_wm_events(&self) {
         self.wnd.on().wm_close({
             let me = self.clone();
             move || {
@@ -256,9 +284,9 @@ impl MyWindow {
                 }
                 config_save.column_widths = cw_v;
                 
-                let rect = me.wnd.hwnd().GetWindowRect().expect("Get window rect failed");
-                config_save.window_width = rect.right - rect.left;
-                config_save.window_height = rect.bottom - rect.top;
+                let rect = me.wnd.hwnd().GetClientRect().expect("Get window rect failed");
+                config_save.window_width = rect.right;
+                config_save.window_height = rect.bottom;
                 
                 let _ = config_save.save();
                 winsafe::PostQuitMessage(0);
@@ -269,11 +297,35 @@ impl MyWindow {
         self.wnd.on().wm_create({
             let me = self.clone();
             move |_| {
+                let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+                let config_init = me.config.lock().expect("Lock failed");
+                let cw = &config_init.column_widths;
+
                 if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).unwrap().LoadIcon(winsafe::IdIdiStr::Id(1)) {
                      unsafe {
                         let _ = me.wnd.hwnd().SendMessage(msg::wm::SetIcon { hicon: winsafe::HICON::from_ptr(hicon_guard.ptr()), size: co::ICON_SZ::BIG });
                     }
                 }
+
+                // Extended styles for ListView
+                unsafe {
+                    me.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
+                        mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+                        style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+                    });
+                }
+                
+                // Initializing columns here, when HWND is valid
+                me.lst_logs.cols().add(&loader.get("col-timestamp"), cw.first().copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-type"), cw.get(1).copied().filter(|&w| w > 0).unwrap_or(120)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-server"), cw.get(2).copied().filter(|&w| w > 0).unwrap_or(120)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-ap-ip"), cw.get(3).copied().filter(|&w| w > 0).unwrap_or(110)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-ap-name"), cw.get(4).copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-mac"), cw.get(5).copied().filter(|&w| w > 0).unwrap_or(130)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-user"), cw.get(6).copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-reason"), cw.get(7).copied().filter(|&w| w > 0).unwrap_or(350)).expect("Add col failed");
+                me.lst_logs.cols().add(&loader.get("col-session"), cw.get(8).copied().filter(|&w| w > 0).unwrap_or(150)).expect("Add col failed");
+
                 Ok(0)
             }
         });
@@ -281,6 +333,11 @@ impl MyWindow {
         self.wnd.on().wm(WM_LOAD_DONE, {
             let me = self.clone();
             move |_| {
+                *me.is_busy.lock().expect("Lock failed") = false;
+                if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
+                    unsafe { SetCursor(hcursor.raw_copy()); }
+                }
+                
                 let count = me.filtered_ids.lock().expect("Lock failed").len();
                 let raw = me.raw_count.lock().expect("Lock failed");
                 me.lst_logs.items().set_count(count as _, None).expect("Set count failed");
@@ -293,32 +350,15 @@ impl MyWindow {
         self.wnd.on().wm(WM_LOAD_ERROR, {
             let me = self.clone();
             move |_| {
+                *me.is_busy.lock().expect("Lock failed") = false;
+                if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
+                    unsafe { SetCursor(hcursor.raw_copy()); }
+                }
                 let _ = me.lbl_status.hwnd().SetWindowText("Erreur lors du chargement.");
                 Ok(0)
             }
         });
 
-        self.wnd.on().wm_size({
-            let me = self.clone();
-            move |p| {
-                if p.request != co::SIZE_R::MINIMIZED {
-                    let _ = me.lst_logs.hwnd().SetWindowPos(
-                        winsafe::HwndPlace::None,
-                        winsafe::POINT { x: 10, y: 50 },
-                        winsafe::SIZE { cx: p.client_area.cx - 20, cy: p.client_area.cy - 100 },
-                        co::SWP::NOZORDER,
-                    );
-                    
-                    let _ = me.lbl_status.hwnd().SetWindowPos(
-                        winsafe::HwndPlace::None,
-                        winsafe::POINT { x: 10, y: p.client_area.cy - 30 },
-                        winsafe::SIZE { cx: p.client_area.cx - 20, cy: 25 },
-                        co::SWP::NOZORDER,
-                    );
-                }
-                Ok(())
-            }
-        });
     }
 
     fn on_events(&self) {
@@ -364,7 +404,21 @@ impl MyWindow {
 
         self.lst_logs.on().nm_custom_draw({
             let me = self.clone();
-            move |p| me.on_lst_nm_custom_draw(p)
+            move |p| Ok(me.on_lst_nm_custom_draw(p))
+        });
+
+        self.wnd.on().wm_set_cursor({
+            let me = self.clone();
+            move |_| {
+                if *me.is_busy.lock().expect("Lock failed") {
+                    if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
+                        unsafe { SetCursor(hcursor.raw_copy()); }
+                    }
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
         });
     }
 
@@ -380,6 +434,9 @@ impl MyWindow {
         if file_dialog.Show(self.wnd.hwnd())? {
             let result = file_dialog.GetResult()?;
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
+            
+            let _busy = BusyCursor::new();
+            *self.is_busy.lock().expect("Lock failed") = true;
             
             let _ = self.lbl_status.hwnd().SetWindowText("Chargement en cours...");
             
@@ -459,6 +516,9 @@ impl MyWindow {
         if file_dialog.Show(self.wnd.hwnd())? {
             let result = file_dialog.GetResult()?;
             let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
+            
+            let _busy = BusyCursor::new();
+            *self.is_busy.lock().expect("Lock failed") = true;
             
             let _ = self.lbl_status.hwnd().SetWindowText("Chargement du dossier...");
             
@@ -595,11 +655,21 @@ impl MyWindow {
             8 => &req.session_id,
             _ => "",
         };
-        let mut wstr = winsafe::WString::from_str(text);
-        let p_ptr = p as *const _ as *mut winsafe::NMLVDISPINFO;
-        unsafe {
-            (*p_ptr).item.set_pszText(Some(&mut wstr));
+
+        use std::cell::RefCell;
+        thread_local! {
+            static DATA: RefCell<winsafe::WString> = const { RefCell::new(winsafe::WString::new()) };
         }
+
+        DATA.with(|buf| {
+            let mut buf_guard = buf.borrow_mut();
+            *buf_guard = winsafe::WString::from_str(text);
+            let p_ptr = std::ptr::from_ref(p) as *mut winsafe::NMLVDISPINFO;
+            unsafe {
+                (*p_ptr).item.mask |= co::LVIF::TEXT;
+                (*p_ptr).item.set_pszText(Some(&mut buf_guard));
+            }
+        });
         Ok(())
     }
 
@@ -700,23 +770,26 @@ impl MyWindow {
         Ok(())
     }
 
-    fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> winsafe::AnyResult<co::CDRF> {
+    fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         if p.mcd.dwDrawStage == co::CDDS::PREPAINT {
-            Ok(co::CDRF::NOTIFYITEMDRAW)
+            co::CDRF::NOTIFYITEMDRAW
         } else if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT {
-            let items = self.all_items.lock().expect("Lock failed");
-            let ids = self.filtered_ids.lock().expect("Lock failed");
-            if let Some(&idx) = ids.get(p.mcd.dwItemSpec) {
-                if let Some((r, g, b)) = items[idx].bg_color {
-                    let p_ptr = p as *const _ as *mut winsafe::NMLVCUSTOMDRAW;
-                    unsafe {
-                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
-                    }
+            let color = {
+                let items = self.all_items.lock().expect("Lock failed");
+                let ids = self.filtered_ids.lock().expect("Lock failed");
+                ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
+            };
+            
+            if let Some((r, g, b)) = color {
+                let p_ptr = std::ptr::from_ref(p).cast_mut();
+                unsafe {
+                    (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(r, g, b);
+                    (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0); // Force black text
                 }
             }
-            Ok(co::CDRF::DODEFAULT)
+            co::CDRF::DODEFAULT
         } else {
-            Ok(co::CDRF::DODEFAULT)
+            co::CDRF::DODEFAULT
         }
     }
 
@@ -737,53 +810,56 @@ fn apply_filter_logic(
 ) {
     let q = query.trim().to_lowercase();
     
-    let items = all_items.lock().expect("Lock failed");
-    
-    let mut failed_session_ids = HashSet::new();
-    if show_errors_only {
-        for item in items.iter() {
-            if item.resp_type == "Access-Reject" && !item.session_id.is_empty() {
-                failed_session_ids.insert(item.session_id.clone());
+    let ids: Vec<usize> = {
+        let items = all_items.lock().expect("Lock failed");
+        
+        let mut failed_session_ids = HashSet::new();
+        if show_errors_only {
+            for item in items.iter() {
+                if item.resp_type == "Access-Reject" && !item.session_id.is_empty() {
+                    failed_session_ids.insert(item.session_id.clone());
+                }
             }
         }
-    }
 
-    let mut ids: Vec<usize> = (0..items.len())
-        .filter(|&i| {
-            let item = &items[i];
-            if show_errors_only {
-                if item.session_id.is_empty() || !failed_session_ids.contains(&item.session_id) {
-                    return false;
+        let mut ids: Vec<usize> = (0..items.len())
+            .filter(|&i| {
+                let item = &items[i];
+                if show_errors_only {
+                    if item.session_id.is_empty() || !failed_session_ids.contains(&item.session_id) {
+                        return false;
+                    }
+                    if item.resp_type == "Access-Accept" || item.resp_type == "Accounting-Response" {
+                        return false;
+                    }
                 }
-                if item.resp_type == "Access-Accept" || item.resp_type == "Accounting-Response" {
-                    return false;
-                }
-            }
-            if q.is_empty() { return true; }
-            item.matches(&q)
-        })
-        .collect();
+                if q.is_empty() { return true; }
+                item.matches(&q)
+            })
+            .collect();
 
-    // Sorting
-    ids.par_sort_unstable_by(|&a_idx, &b_idx| {
-        let a = &items[a_idx];
-        let b = &items[b_idx];
-        let ord = match sort_col {
-            SortColumn::Timestamp => a.timestamp.cmp(&b.timestamp),
-            SortColumn::Type => a.req_type.cmp(&b.req_type),
-            SortColumn::Server => a.server.cmp(&b.server),
-            SortColumn::ApIp => a.ap_ip.cmp(&b.ap_ip),
-            SortColumn::ApName => a.ap_name.cmp(&b.ap_name),
-            SortColumn::Mac => a.mac.cmp(&b.mac),
-            SortColumn::User => a.user.cmp(&b.user),
-            SortColumn::Reason => {
-                let r_a = if a.reason.is_empty() { &a.resp_type } else { &a.reason };
-                let r_b = if b.reason.is_empty() { &b.resp_type } else { &b.reason };
-                r_a.cmp(r_b)
-            }
-        };
-        if sort_descending { ord.reverse() } else { ord }
-    });
+        // Sorting
+        ids.par_sort_unstable_by(|&a_idx, &b_idx| {
+            let a = &items[a_idx];
+            let b = &items[b_idx];
+            let ord = match sort_col {
+                SortColumn::Timestamp => a.timestamp.cmp(&b.timestamp),
+                SortColumn::Type => a.req_type.cmp(&b.req_type),
+                SortColumn::Server => a.server.cmp(&b.server),
+                SortColumn::ApIp => a.ap_ip.cmp(&b.ap_ip),
+                SortColumn::ApName => a.ap_name.cmp(&b.ap_name),
+                SortColumn::Mac => a.mac.cmp(&b.mac),
+                SortColumn::User => a.user.cmp(&b.user),
+                SortColumn::Reason => {
+                    let r_a = if a.reason.is_empty() { &a.resp_type } else { &a.reason };
+                    let r_b = if b.reason.is_empty() { &b.resp_type } else { &b.reason };
+                    r_a.cmp(r_b)
+                }
+            };
+            if sort_descending { ord.reverse() } else { ord }
+        });
+        ids
+    };
 
     let mut filt_guard = filtered_ids.lock().expect("Lock failed");
     *filt_guard = ids;
@@ -868,114 +944,28 @@ fn process_group(group: &[Event]) -> RadiusRequest {
 }
 
 fn map_packet_type(code: &str) -> String {
-    match code {
-        "1" => "Access-Request".to_string(),
-        "2" => "Access-Accept".to_string(),
-        "3" => "Access-Reject".to_string(),
-        "4" => "Accounting-Request".to_string(),
-        "5" => "Accounting-Response".to_string(),
-        "11" => "Access-Challenge".to_string(),
-        _ => code.to_string(),
-    }
+    let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+    let key = format!("radius-packet-types-{code}");
+    let val = loader.get(&key);
+    if val == key { code.to_string() } else { val }
 }
 
 fn map_reason(code: &str) -> String {
-    match code {
-        "0" => "The connection request was successfully authenticated and authorized by Network Policy Server.".to_string(),
-        "1" => "The connection request failed due to a Network Policy Server error.".to_string(),
-        "2" => "There are insufficient access rights to process the request.".to_string(),
-        "3" => "The Remote Authentication Dial-In User Service (RADIUS) Access-Request message that NPS received from the network access server was malformed.".to_string(),
-        "4" => "The NPS server was unable to access the Active Directory Domain Services (AD DS) global catalog.".to_string(),
-        "5" => "The Network Policy Server was unable to connect to a domain controller in the domain where the user account is located.".to_string(),
-        "6" => "The NPS server is unavailable. This issue can occur if the NPS server is running low on or is out of random access memory (RAM).".to_string(),
-        "7" => "The domain that is specified in the User-Name attribute of the RADIUS message does not exist.".to_string(),
-        "8" => "The user account that is specified in the User-Name attribute of the RADIUS message does not exist.".to_string(),
-        "9" => "An Internet Authentication Service (IAS) extension dynamic link library (DLL) that is installed on the NPS server discarded the connection request.".to_string(),
-        "10" => "An IAS extension dynamic link library (DLL) that is installed on the NPS server has failed and cannot perform its function.".to_string(),
-        "16" => "Authentication failed due to a user credentials mismatch. Either the user name provided does not match an existing user account or the password was incorrect.".to_string(),
-        "17" => "The user's attempt to change their password has failed.".to_string(),
-        "18" => "The authentication method used by the client computer is not supported by Network Policy Server for this connection.".to_string(),
-        "20" => "The client attempted to use LAN Manager authentication, which is not supported by Network Policy Server.".to_string(),
-        "21" => "An IAS extension dynamic link library (DLL) that is installed on the NPS server rejected the connection request.".to_string(),
-        "22" => "Network Policy Server was unable to negotiate the use of an Extensible Authentication Protocol (EAP) type with the client computer.".to_string(),
-        "23" => "An error occurred during the Network Policy Server use of the Extensible Authentication Protocol (EAP).".to_string(),
-        "32" => "NPS is joined to a workgroup and performs the authentication and authorization of connection requests using the local SAM database.".to_string(),
-        "33" => "The user that is attempting to connect to the network must change their password.".to_string(),
-        "34" => "The user account that is specified in the RADIUS Access-Request message is disabled.".to_string(),
-        "35" => "The user account that is specified in the RADIUS Access-Request message is expired.".to_string(),
-        "36" => "The user's authentication attempts have exceeded the maximum allowed number of failed attempts.".to_string(),
-        "37" => "According to AD DS user account logon hours, the user is not permitted to access the network on this day and time.".to_string(),
-        "38" => "Authentication failed due to a user account restriction or requirement that was not followed.".to_string(),
-        "48" => "The connection request did not match a configured network policy, so the connection request was denied by Network Policy Server.".to_string(),
-        "49" => "The connection request did not match a configured connection request policy, so the connection request was denied by Network Policy Server.".to_string(),
-        "64" => "Remote Access Account Lockout is enabled, and the user's authentication attempts have exceeded the designated lockout count.".to_string(),
-        "65" => "The Network Access Permission setting in the dial-in properties of the user account is set to Deny access to the user.".to_string(),
-        "66" => "Authentication failed. Either the client computer attempted to use an authentication method that is not enabled on the matching network policy or the client computer attempted to authenticate as Guest.".to_string(),
-        "67" => "NPS denied the connection request because the value of the Calling-Station-ID attribute did not match the value of Verify Caller ID.".to_string(),
-        "68" => "The user or computer does not have permission to access the network on this day at this time.".to_string(),
-        "69" => "The telephone number of the network access server does not match the value of the Calling-Station-ID attribute.".to_string(),
-        "70" => "The network access method used by the access client to connect to the network does not match the value of the NAS-Port-Type attribute.".to_string(),
-        "72" => "The user password has expired or is about to expire and the user must change their password.".to_string(),
-        "73" => "The purposes that are configured in the Application Policies extensions of the user or computer certificate are not valid or are missing.".to_string(),
-        "80" => "NPS attempted to write accounting data to the data store, but failed to do so for unknown reasons.".to_string(),
-        "96" => "Authentication failed due to an Extensible Authentication Protocol (EAP) session timeout.".to_string(),
-        "97" => "The authentication request was not processed because it contained a RADIUS message that was not appropriate for the secure authentication transaction.".to_string(),
-        "112" => "The local NPS proxy server forwarded a connection request to a remote RADIUS server, and the remote server rejected the connection request.".to_string(),
-        "113" => "The local NPS proxy attempted to forward a connection request to a member of a remote RADIUS server group that does not exist.".to_string(),
-        "115" => "The local NPS proxy did not forward a RADIUS message because it is not an accounting request or a connection request.".to_string(),
-        "116" => "The local NPS proxy server cannot forward the connection request to the remote RADIUS server (Socket error).".to_string(),
-        "117" => "The remote RADIUS server did not respond to the local NPS proxy within an acceptable time period.".to_string(),
-        "118" => "The local NPS proxy server received a RADIUS message that is malformed from a remote RADIUS server.".to_string(),
-        "256" => "The certificate provided by the user or computer as proof of their identity is a revoked certificate.".to_string(),
-        "257" => "NPS cannot access the certificate revocation list to verify whether the user or client computer certificate is valid or is revoked (Missing DLL).".to_string(),
-        "258" => "NPS cannot access the certificate revocation list to verify whether the user or client computer certificate is valid or is revoked.".to_string(),
-        "259" => "The certification authority that manages the certificate revocation list is not available.".to_string(),
-        "260" => "The EAP message has been altered so that the MD5 hash of the entire RADIUS message does not match.".to_string(),
-        "261" => "NPS cannot contact Active Directory Domain Services (AD DS) or the local user accounts database.".to_string(),
-        "262" => "NPS discarded the RADIUS message because it is incomplete and the signature was not verified.".to_string(),
-        "263" => "NPS did not receive complete credentials from the user or computer.".to_string(),
-        "264" => "The SSPI called by EAP reports that the system clocks on the NPS server and the access client are not synchronized.".to_string(),
-        "265" => "The certificate that the user or client computer provided to NPS chains to an enterprise root CA that is not trusted by the NPS server.".to_string(),
-        "266" => "NPS received a message that was either unexpected or incorrectly formatted.".to_string(),
-        "267" => "The certificate provided by the connecting user or computer is not valid (Missing Client Authentication purpose).".to_string(),
-        "268" => "The certificate provided by the connecting user or computer is expired.".to_string(),
-        "269" => "The SSPI called by EAP reports that the NPS server and the access client cannot communicate because they do not possess a common algorithm.".to_string(),
-        "270" => "The user is required to log on with a smart card, but they have attempted to log on by using other credentials.".to_string(),
-        "271" => "The connection request was not processed because the NPS server was in the process of shutting down or restarting.".to_string(),
-        "272" => "The certificate implies multiple user or computer accounts rather than one account.".to_string(),
-        "273" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider is not recognized.".to_string(),
-        "274" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider does not support the specified action.".to_string(),
-        "275" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider does not support the specified form.".to_string(),
-        "276" => "Authentication failed. The binary file that calls EAP cannot be verified and is not trusted.".to_string(),
-        "277" => "Authentication failed. The binary file that calls EAP is not signed, or the signer certificate cannot be found.".to_string(),
-        "278" => "Authentication failed. The certificate that was provided by the connecting user or computer is expired.".to_string(),
-        "279" => "Authentication failed. The certificate is not valid because the validity periods of certificates in the chain do not match.".to_string(),
-        "280" => "Authentication failed. The certificate is not valid and was not issued by a valid certification authority (CA).".to_string(),
-        "281" => "Authentication failed. The path length constraint in the certification chain has been exceeded.".to_string(),
-        "282" => "Authentication failed. The certificate contains a critical extension that is unrecognized by NPS.".to_string(),
-        "283" => "Authentication failed. The certificate does not contain the Client Authentication purpose in Application Policies extensions.".to_string(),
-        "284" => "Authentication failed. The certificate issuer and the parent of the certificate in the certificate chain do not match.".to_string(),
-        "285" => "Authentication failed. NPS cannot locate the certificate, or the certificate is incorrectly formed.".to_string(),
-        "286" | "295" => "Authentication failed. The CA is not trusted by the NPS server.".to_string(),
-        "287" => "Authentication failed. The certificate does not chain to an enterprise root CA that NPS trusts.".to_string(),
-        "288" => "Authentication failed due to an unspecified trust failure.".to_string(),
-        "289" => "Authentication failed. The certificate provided by the connecting user or computer is revoked.".to_string(),
-        "290" => "Authentication failed. A test or trial certificate is in use, however the test root CA is not trusted.".to_string(),
-        "291" => "Authentication failed because NPS cannot locate and access the certificate revocation list.".to_string(),
-        "292" => "Authentication failed. The User-Name attribute does not match the CN in the certificate.".to_string(),
-        "293" | "296" => "Authentication failed. The certificate is not configured with the Client Authentication purpose.".to_string(),
-        "294" => "Authentication failed because the certificate was explicitly marked as untrusted by the Administrator.".to_string(),
-        "297" => "Authentication failed. The certificate does not have a valid name.".to_string(),
-        "298" => "Authentication failed. Either the certificate does not contain a valid UPN or the User-Name does not match.".to_string(),
-        "299" => "Authentication failed. The sequence of information provided by internal components or protocols is incorrect.".to_string(),
-        "300" => "Authentication failed. The certificate is malformed and EAP cannot locate credential information.".to_string(),
-        "301" => "NPS terminated the authentication process. Invalid crypto-binding TLV (Potential Man-in-the-Middle).".to_string(),
-        "302" => "NPS terminated the authentication process. Missing crypto-binding TLV.".to_string(),
-        _ => format!("Code {code}"),
-    }
+    let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+    let key = format!("nps-reasons-{code}");
+    let val = loader.get(&key);
+    if val == key { format!("Code {code}") } else { val }
 }
 
 fn main() {
+    let loader: FluentLanguageLoader = fluent_language_loader!();
+    
+    // Choose requested languages based on system locale
+    let requested_languages = DesktopLanguageRequester::requested_languages();
+    let _ = i18n_embed::select(&loader, &Localizations, &requested_languages);
+    
+    LANGUAGE_LOADER.set(loader).ok();
+
     let app = MyWindow::new();
     if let Err(e) = app.run() {
         eprintln!("{e}");

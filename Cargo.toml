@@ -21,6 +21,9 @@ serde = { version = "1.0", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 serde_json = "1.0.149"
 clipboard-win = "5.4.1"
+i18n-embed = { version = "0.15", features = ["fluent-system", "desktop-requester"] }
+rust-embed = "8.5"
+unic-langid = "0.9"
 
 
 # Optimize for size while keeping debug info for crash reports
