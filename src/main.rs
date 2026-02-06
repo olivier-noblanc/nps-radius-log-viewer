@@ -218,6 +218,7 @@ struct MyWindow {
     visible_cols: Arc<Mutex<Vec<LogColumn>>>,
     config:       Arc<Mutex<AppConfig>>,
     is_busy:      Arc<Mutex<bool>>,
+    bold_font:    Arc<Mutex<Option<winsafe::guard::DeleteObjectGuard<winsafe::HFONT>>>>,
 }
 
 impl MyWindow {
@@ -300,6 +301,7 @@ impl MyWindow {
             visible_cols: Arc::new(Mutex::new(config.visible_columns.clone())),
             config:       Arc::new(Mutex::new(config)),
             is_busy:      Arc::new(Mutex::new(false)),
+            bold_font:    Arc::new(Mutex::new(None::<winsafe::guard::DeleteObjectGuard<winsafe::HFONT>>)),
         };
 
         new_self.on_wm_events();
@@ -333,6 +335,11 @@ impl MyWindow {
                 config_save.window_height = rect.bottom;
                 
                 let _ = config_save.save();
+                
+                if let Some(hfont) = me.bold_font.lock().expect("Lock failed").take() {
+                    let _ = hfont; // Guard will drop and delete the font
+                }
+
                 winsafe::PostQuitMessage(0);
                 Ok(())
             }
@@ -353,8 +360,17 @@ impl MyWindow {
                         mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                         style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
-                    // Restore Explorer theme as FillRect should overcome theme overrides
-                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("Explorer", None);
+                    // Disable Explorer theme (switch to Classic mode) to ensure background colors work over RDP
+                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
+
+                    // Create Bold Font
+                    if let Some(hfont) = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}) {
+                        let mut lf = hfont.GetObject().unwrap_or_default();
+                        lf.lfWeight = co::FW::BOLD;
+                        if let Ok(hfont_bold) = winsafe::HFONT::CreateFontIndirect(&lf) {
+                            *me.bold_font.lock().expect("Lock failed") = Some(hfont_bold);
+                        }
+                    }
                 }
                 
                 // Initializing columns dynamically
@@ -921,16 +937,35 @@ impl MyWindow {
                 };
                 if let Some(clr) = color {
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                        p.mcd.hdc.FillRect(p.mcd.rc, &brush);
-                    }
+                    
+                    // RDP optimization: Set background color and text color explicitly
+                    // This helps when FillRect is optimized away
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
-                        (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
+                        // Use contrast colors for text
+                        let text_color = if clr.1 > 200 { 
+                            winsafe::COLORREF::from_rgb(0, 128, 0) // Dark Green for Green bg
+                        } else if clr.0 > 200 {
+                            winsafe::COLORREF::from_rgb(128, 0, 0) // Dark Red for Red bg
+                        } else {
+                            winsafe::COLORREF::from_rgb(0, 0, 0)
+                        };
+                        (*p_ptr).clrText = text_color;
+                        
                         let _ = p.mcd.hdc.SetBkColor(color_ref);
-                        let _ = p.mcd.hdc.SetTextColor(winsafe::COLORREF::from_rgb(0, 0, 0));
+                        let _ = p.mcd.hdc.SetTextColor(text_color);
+                        
+                        // Select bold font if available
+                        if let Some(hfont) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                            let _ = p.mcd.hdc.SelectObject(&**hfont);
+                        }
                     }
+                    
+                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
+                    }
+                    
                     unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
                 } else {
                     co::CDRF::NOTIFYSUBITEMDRAW
@@ -945,16 +980,28 @@ impl MyWindow {
                 
                 if let Some(clr) = color {
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                    // Also fill subitem rect for safety
-                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                        p.mcd.hdc.FillRect(p.mcd.rc, &brush);
-                    }
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
-                        (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
+                        let text_color = if clr.1 > 200 { 
+                            winsafe::COLORREF::from_rgb(0, 128, 0)
+                        } else if clr.0 > 200 {
+                            winsafe::COLORREF::from_rgb(128, 0, 0)
+                        } else {
+                            winsafe::COLORREF::from_rgb(0, 0, 0)
+                        };
+                        (*p_ptr).clrText = text_color;
+                        
                         let _ = p.mcd.hdc.SetBkColor(color_ref);
-                        let _ = p.mcd.hdc.SetTextColor(winsafe::COLORREF::from_rgb(0, 0, 0));
+                        let _ = p.mcd.hdc.SetTextColor(text_color);
+
+                        if let Some(hfont) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                            let _ = p.mcd.hdc.SelectObject(&**hfont);
+                        }
+                    }
+                    
+                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
                     }
                     co::CDRF::NEWFONT 
                 } else {
