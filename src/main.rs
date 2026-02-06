@@ -489,7 +489,21 @@ impl MyWindow {
             move |p| Ok(me.on_lst_nm_custom_draw(p))
         });
 
-
+        self.wnd.on().wm_set_cursor({
+            let me = self.clone();
+            move |p| {
+                // IMPORTANT: Only override if mouse is in Client Area and we are busy.
+                // If it's on Borders (HT::TOP, HT::RIGHT, etc.), return false to let Windows show the resize arrow.
+                if p.hit_test == co::HT::CLIENT && *me.is_busy.lock().expect("Lock failed") {
+                    if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
+                        unsafe { SetCursor(hcursor.raw_copy()); }
+                    }
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+        });
     }
 
     fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
