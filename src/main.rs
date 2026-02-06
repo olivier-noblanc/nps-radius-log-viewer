@@ -110,13 +110,12 @@ impl AppConfig {
         let screen_cx = winsafe::GetSystemMetrics(co::SM::CXSCREEN);
         let screen_cy = winsafe::GetSystemMetrics(co::SM::CYSCREEN);
 
-        // If dimensions are missing or excessively large (larger than the screen or previous bug)
-        // Reset to 1024x768 to ensure window borders are well within screen bounds.
-        if cfg.window_width <= 0 || cfg.window_width > screen_cx {
-            cfg.window_width = 1024;
+        // Clean start for resizing: Force 800x600 if oversized or corrupted
+        if cfg.window_width <= 100 || cfg.window_width > screen_cx {
+            cfg.window_width = 800;
         }
-        if cfg.window_height <= 0 || cfg.window_height > screen_cy {
-            cfg.window_height = 768;
+        if cfg.window_height <= 100 || cfg.window_height > screen_cy {
+            cfg.window_height = 600;
         }
         cfg
     }
@@ -245,8 +244,8 @@ impl MyWindow {
                 title: &format!("{}{}", loader.get("ui-title"), loader.get("ui-window-suffix")),
                 class_icon: gui::Icon::Id(1),
                 size: (config.window_width, config.window_height),
-                style: co::WS::CAPTION | co::WS::SYSMENU | co::WS::MINIMIZEBOX | co::WS::MAXIMIZEBOX | co::WS::SIZEBOX | co::WS::VISIBLE | co::WS::CLIPCHILDREN,
-                ex_style: co::WS_EX::WINDOWEDGE | co::WS_EX::APPWINDOW,
+                style: co::WS::CAPTION | co::WS::SYSMENU | co::WS::MINIMIZEBOX | co::WS::MAXIMIZEBOX | co::WS::SIZEBOX | co::WS::VISIBLE,
+                ex_style: co::WS_EX::APPWINDOW,
                 ..Default::default()
             },
         );
@@ -489,21 +488,7 @@ impl MyWindow {
             move |p| Ok(me.on_lst_nm_custom_draw(p))
         });
 
-        self.wnd.on().wm_set_cursor({
-            let me = self.clone();
-            move |p| {
-                // IMPORTANT: Only override if mouse is in Client Area and we are busy.
-                // If it's on Borders (HT::TOP, HT::RIGHT, etc.), return false to let Windows show the resize arrow.
-                if p.hit_test == co::HT::CLIENT && *me.is_busy.lock().expect("Lock failed") {
-                    if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-                        unsafe { SetCursor(hcursor.raw_copy()); }
-                    }
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-        });
+
     }
 
     fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
