@@ -477,7 +477,10 @@ impl MyWindow {
         self.wnd.on().wm_set_cursor({
             let me = self.clone();
             move |p| {
-                if *me.is_busy.lock().expect("Lock failed") && p.hit_test == co::HT::CLIENT {
+                if p.hit_test != co::HT::CLIENT {
+                    return Ok(false); // Let system handle border cursors
+                }
+                if *me.is_busy.lock().expect("Lock failed") {
                     if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
                         unsafe { SetCursor(hcursor.raw_copy()); }
                     }
@@ -1180,8 +1183,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
             req.resp_type = map_packet_type(p_type);
             req.reason = map_reason(event.reason_code.as_deref().unwrap_or("0"));
             match p_type {
-                "2" => req.bg_color = Some((188, 255, 188)),
-                "3" => req.bg_color = Some((255, 188, 188)),
+                "2" => req.bg_color = Some((204, 255, 204)), // Web-safe light green
+                "3" => req.bg_color = Some((255, 204, 204)), // Web-safe light red
                 _ => {},
             }
         }
