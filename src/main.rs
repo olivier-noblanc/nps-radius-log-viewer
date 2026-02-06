@@ -350,9 +350,11 @@ impl MyWindow {
                 // Extended styles for ListView
                 unsafe {
                     me.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
-                        mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
-                        style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+                        mask: co::LVS_EX::FULLROWSELECT,
+                        style: co::LVS_EX::FULLROWSELECT,
                     });
+                    // Force Explorer theme to ensure CustomDraw is respected on all systems
+                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("Explorer", None);
                 }
                 
                 // Initializing columns dynamically
@@ -906,21 +908,7 @@ impl MyWindow {
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
-            co::CDDS::ITEMPREPAINT => {
-                let color = {
-                    let items = self.all_items.lock().expect("Lock failed");
-                    let ids = self.filtered_ids.lock().expect("Lock failed");
-                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
-                };
-                if let Some(clr) = color {
-                    let p_ptr = std::ptr::from_ref(p).cast_mut();
-                    unsafe {
-                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
-                    }
-                }
-                co::CDRF::NOTIFYSUBITEMDRAW
-            },
+            co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
             _ if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT | co::CDDS::SUBITEM => {
                 let color = {
                     let items = self.all_items.lock().expect("Lock failed");
@@ -934,7 +922,7 @@ impl MyWindow {
                         (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
                         (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
                     }
-                    co::CDRF::NEWFONT // Forces control to use our colors
+                    co::CDRF::NEWFONT // Important: forces some render engines to use the specified colors
                 } else {
                     co::CDRF::DODEFAULT
                 }
