@@ -873,7 +873,7 @@ impl MyWindow {
         Ok(())
     }
 
-    fn on_btn_copy_clicked(&self) -> winsafe::AnyResult<()> {
+    fn on_btn_copy_clicked(&self) {
         if let Some(iitem) = self.lst_logs.items().iter_selected().next() {
             let items = self.all_items.lock().expect("Lock failed");
             let ids = self.filtered_ids.lock().expect("Lock failed");
@@ -882,7 +882,6 @@ impl MyWindow {
                 let _ = clipboard_win::set_clipboard_string(&tsv);
             }
         }
-        Ok(())
     }
 
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
@@ -924,7 +923,7 @@ impl MyWindow {
         let config = self.config.lock().expect("Lock failed");
         let all_cols = LogColumn::all();
         
-        for &col in visible.iter() {
+        for &col in &visible {
             let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
             let width = config.column_widths.get(col_idx).copied().filter(|&w| w > 0).unwrap_or(150);
             let text = clean_tr(&loader.get(col.ftl_key()));
