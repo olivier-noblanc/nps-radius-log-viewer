@@ -1093,7 +1093,8 @@ fn map_reason(code: &str) -> String {
 }
 
 fn main() {
-    let loader: FluentLanguageLoader = fluent_language_loader!();
+    let mut loader: FluentLanguageLoader = fluent_language_loader!();
+    loader.set_use_isolating(false);
     
     // Choose requested languages based on system locale
     let requested_languages = DesktopLanguageRequester::requested_languages();
