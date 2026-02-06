@@ -6,6 +6,15 @@ ui-append = Append
 ui-copy = 📋 Copier
 ui-status-ready = Prêt. Ouvrez un fichier log.
 ui-search-hint = Rechercher...
+ui-status-display = Affichage : { $count } sessions ({ $raw } événements bruts).
+ui-status-error = Erreur lors du chargement.
+ui-status-loading = Chargement en cours...
+ui-status-loading-folder = Chargement du dossier...
+ui-menu-copy-cell = 📋 Copier la cellule
+ui-menu-filter-cell = 🔍 Filtrer par cette valeur
+ui-btn-show-all = ⚠️ Tout afficher
+ui-btn-errors-only = ⚠️ Erreurs
+ui-unknown-user = - INCONNU -
 
 col-timestamp = Horodatage
 col-type = Type de Paquet

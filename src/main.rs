@@ -341,7 +341,13 @@ impl MyWindow {
                 let count = me.filtered_ids.lock().expect("Lock failed").len();
                 let raw = me.raw_count.lock().expect("Lock failed");
                 me.lst_logs.items().set_count(count as _, None).expect("Set count failed");
-                let _ = me.lbl_status.hwnd().SetWindowText(&format!("Affichage : {count} sessions ({raw} événements bruts)."));
+                
+                let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+                let status_fmt = loader.get("ui-status-display")
+                    .replace("{ $count }", &count.to_string())
+                    .replace("{ $raw }", &raw.to_string());
+                
+                let _ = me.lbl_status.hwnd().SetWindowText(&status_fmt);
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
                 Ok(0)
             }
@@ -354,7 +360,8 @@ impl MyWindow {
                 if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
                     unsafe { SetCursor(hcursor.raw_copy()); }
                 }
-                let _ = me.lbl_status.hwnd().SetWindowText("Erreur lors du chargement.");
+                let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+                let _ = me.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-error"));
                 Ok(0)
             }
         });
@@ -438,7 +445,8 @@ impl MyWindow {
             let _busy = BusyCursor::new();
             *self.is_busy.lock().expect("Lock failed") = true;
             
-            let _ = self.lbl_status.hwnd().SetWindowText("Chargement en cours...");
+            let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+            let _ = self.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-loading"));
             
             let query = self.txt_search.text().unwrap_or_default();
             let show_err_val = *self.show_errors.lock().expect("Lock failed");
@@ -520,7 +528,8 @@ impl MyWindow {
             let _busy = BusyCursor::new();
             *self.is_busy.lock().expect("Lock failed") = true;
             
-            let _ = self.lbl_status.hwnd().SetWindowText("Chargement du dossier...");
+            let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+            let _ = self.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-loading-folder"));
             
             let query = self.txt_search.text().unwrap_or_default();
             let show_err_val = *self.show_errors.lock().expect("Lock failed");
@@ -611,8 +620,9 @@ impl MyWindow {
         if unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::HitTest { info: &mut lvhti }).is_some() }
             && lvhti.iItem != -1 {
                 let h_menu = winsafe::HMENU::CreatePopupMenu()?;
-                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str("📋 Copier la cellule"))?;
-                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str("🔍 Filtrer par cette valeur"))?;
+                let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str(&loader.get("ui-menu-copy-cell")))?;
+                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str(&loader.get("ui-menu-filter-cell")))?;
 
                 let cursor_pos = winsafe::GetCursorPos().expect("GetCursorPos failed");
                 if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, cursor_pos, self.lst_logs.hwnd())? {
@@ -738,7 +748,9 @@ impl MyWindow {
         let mut show_err_g = self.show_errors.lock().expect("Lock failed");
         *show_err_g = !*show_err_g;
         let is_on = *show_err_g;
-        let _ = self.btn_rejects.hwnd().SetWindowText(if is_on { "⚠️ Tout afficher" } else { "⚠️ Erreurs" });
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        let txt = if is_on { loader.get("ui-btn-show-all") } else { loader.get("ui-btn-errors-only") };
+        let _ = self.btn_rejects.hwnd().SetWindowText(&txt);
         drop(show_err_g);
         
         let query = self.txt_search.text().unwrap_or_default();
@@ -929,7 +941,10 @@ fn process_group(group: &[Event]) -> RadiusRequest {
             req.req_type = map_packet_type(p_type);
             if let Some(user) = &event.sam_account { req.user.clone_from(user); } 
             else if let Some(user) = &event.user_name { req.user.clone_from(user); } 
-            else { req.user = "- INCONNU -".to_string(); }
+            else { 
+                let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+                req.user = loader.get("ui-unknown-user"); 
+            }
         } else {
             req.resp_type = map_packet_type(p_type);
             req.reason = map_reason(event.reason_code.as_deref().unwrap_or("0"));
