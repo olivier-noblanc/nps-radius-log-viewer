@@ -192,7 +192,7 @@ impl MyWindow {
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         let wnd = gui::WindowMain::new(
             gui::WindowMainOpts {
-                title: &format!("{} - WinSafe Edition", loader.get("ui-title")),
+                title: &format!("{}{}", loader.get("ui-title"), loader.get("ui-window-suffix")),
                 class_icon: gui::Icon::Id(1),
                 size: (config.window_width, config.window_height),
                 style: co::WS::CAPTION | co::WS::SYSMENU | co::WS::MINIMIZEBOX | co::WS::MAXIMIZEBOX | co::WS::SIZEBOX | co::WS::VISIBLE | co::WS::CLIPCHILDREN,
@@ -436,7 +436,13 @@ impl MyWindow {
             co::CLSCTX::INPROC_SERVER,
         )?;
         
-        file_dialog.SetFileTypes(&[("Log files", "*.log"), ("All files", "*.*")])?;
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        let sz_log = loader.get("ui-file-log");
+        let sz_all = loader.get("ui-file-all");
+        file_dialog.SetFileTypes(&[
+            (sz_log.as_str(), "*.log"), 
+            (sz_all.as_str(), "*.*")
+        ])?;
         
         if file_dialog.Show(self.wnd.hwnd())? {
             let result = file_dialog.GetResult()?;
@@ -969,7 +975,9 @@ fn map_reason(code: &str) -> String {
     let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
     let key = format!("nps-reasons-{code}");
     let val = loader.get(&key);
-    if val == key { format!("Code {code}") } else { val }
+    if val == key { 
+        loader.get("ui-map-code").replace("{ $code }", code)
+    } else { val }
 }
 
 fn main() {

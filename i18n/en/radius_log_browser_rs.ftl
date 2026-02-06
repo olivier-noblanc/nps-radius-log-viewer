@@ -15,6 +15,10 @@ ui-menu-filter-cell = 🔍 Filter by this value
 ui-btn-show-all = ⚠️ Show all
 ui-btn-errors-only = ⚠️ Errors
 ui-unknown-user = - UNKNOWN -
+ui-file-log = Log Files
+ui-file-all = All Files
+ui-window-suffix = - WinSafe Edition
+ui-map-code = Code { $code }
 
 col-timestamp = Timestamp
 col-type = Packet Type
