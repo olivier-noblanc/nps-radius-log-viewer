@@ -182,36 +182,6 @@ impl LogColumn {
         }
     }
 }
-
-// --- FFI for Cursor Management (missing in Winsafe 0.0.27) ---
-extern "system" {
-    fn SetCursor(hcursor: winsafe::HCURSOR) -> winsafe::HCURSOR;
-}
-
-/// RAII helper to show wait cursor.
-struct BusyCursor;
-
-impl BusyCursor {
-    fn new(hwnd: winsafe::HWND) -> Self {
-        if let Ok(h_wait) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-            unsafe { SetCursor(h_wait.raw_copy()); }
-        }
-        // Force update now
-        unsafe {
-            let _ = hwnd.PostMessage(msg::WndMsg { msg_id: co::WM::SETCURSOR, wparam: hwnd.ptr() as _, lparam: 0x2000001 }); // HTCLIENT
-        }
-        Self
-    }
-}
-
-impl Drop for BusyCursor {
-    fn drop(&mut self) {
-        if let Ok(h_arrow) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
-            unsafe { SetCursor(h_arrow.raw_copy()); }
-        }
-    }
-}
-
 // --- UI Application ---
 
 #[derive(Clone)]
@@ -225,6 +195,7 @@ struct MyWindow {
     cb_append:    gui::CheckBox,
     btn_copy:     gui::Button,
     lbl_status:   gui::Label,
+    progress:     gui::ProgressBar,
     
     all_items:    Arc<Mutex<Vec<RadiusRequest>>>,
     raw_count:    Arc<Mutex<usize>>,
@@ -299,15 +270,21 @@ impl MyWindow {
             btn_copy:     gui::Button::new(&wnd, gui::ButtonOpts {
                 text: &loader.get("ui-copy"),
                 position: (650, 10),
-                width: 100,
+                width: 120,
                 height: 30,
                 ..Default::default()
             }),
             lbl_status:   gui::Label::new(&wnd, gui::LabelOpts {
-                text: &loader.get("ui-status-ready"),
                 position: (10, config.window_height - 30),
-                size: (400, 20),
+                size: (config.window_width - 150, 20),
                 resize_behavior: (gui::Horz::None, gui::Vert::Repos),
+                ..Default::default()
+            }),
+            progress:     gui::ProgressBar::new(&wnd, gui::ProgressBarOpts {
+                position: (config.window_width - 130, config.window_height - 25),
+                size: (110, 15),
+                control_style: co::PBS::MARQUEE,
+                resize_behavior: (gui::Horz::Repos, gui::Vert::Repos),
                 ..Default::default()
             }),
             all_items:    Arc::new(Mutex::new(Vec::new())),
@@ -391,6 +368,9 @@ impl MyWindow {
                     }
                 }
                 
+                // Initial state: hide progress
+                me.progress.hwnd().ShowWindow(co::SW::HIDE);
+                
                 // Initializing columns dynamically
                 me.refresh_columns();
 
@@ -402,9 +382,8 @@ impl MyWindow {
             let me = self.clone();
             move |_| {
                 *me.is_busy.lock().expect("Lock failed") = false;
-                if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
-                    unsafe { SetCursor(hcursor.raw_copy()); }
-                }
+                me.progress.set_marquee(false);
+                me.progress.hwnd().ShowWindow(co::SW::HIDE);
                 
                 let count = me.filtered_ids.lock().expect("Lock failed").len();
                 let raw_str = me.raw_count.lock().expect("Lock failed").to_string();
@@ -429,9 +408,8 @@ impl MyWindow {
             let me = self.clone();
             move |_| {
                 *me.is_busy.lock().expect("Lock failed") = false;
-                if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
-                    unsafe { SetCursor(hcursor.raw_copy()); }
-                }
+                me.progress.set_marquee(false);
+                me.progress.hwnd().ShowWindow(co::SW::HIDE);
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let _ = me.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-error"));
                 Ok(0)
@@ -491,20 +469,6 @@ impl MyWindow {
             let me = self.clone();
             move |p| Ok(me.on_lst_nm_custom_draw(p))
         });
-
-        self.wnd.on().wm_set_cursor({
-            let me = self.clone();
-            move |p| {
-                if p.hit_test == co::HT::CLIENT && *me.is_busy.lock().expect("Lock failed") {
-                    if let Ok(h_wait) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-                        unsafe { SetCursor(h_wait.raw_copy()); }
-                    }
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-        });
     }
 
     fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
@@ -526,7 +490,8 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            let _busy = BusyCursor::new(unsafe { self.wnd.hwnd().raw_copy() });
+            let _ = self.progress.hwnd().ShowWindow(co::SW::SHOW);
+            self.progress.set_marquee(true);
             *self.is_busy.lock().expect("Lock failed") = true;
             
             // Proactive safety: Clear list view count before background update starts (if not appending)
@@ -614,7 +579,8 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            let _busy = BusyCursor::new(unsafe { self.wnd.hwnd().raw_copy() });
+            let _ = self.progress.hwnd().ShowWindow(co::SW::SHOW);
+            self.progress.set_marquee(true);
             *self.is_busy.lock().expect("Lock failed") = true;
 
             // Proactive safety: Clear list view count before background update starts (if not appending)
