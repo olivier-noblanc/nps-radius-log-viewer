@@ -183,27 +183,48 @@ impl LogColumn {
     }
 }
 
-// --- FFI for SetCursor (missing in winsafe 0.0.27) ---
+// --- FFI for Cursor Management (missing/limited in Winsafe 0.0.27) ---
 extern "system" {
     fn SetCursor(hcursor: winsafe::HCURSOR) -> winsafe::HCURSOR;
+    fn SetClassLongPtrW(hwnd: winsafe::HWND, index: i32, new_long: isize) -> isize;
 }
 
-/// RAII helper to show wait cursor.
-struct BusyCursor;
+const GCLP_HCURSOR: i32 = -12;
+
+/// RAII helper to show wait cursor at the window class level.
+/// This ensures borders remain resizable by letting the OS handle the hit-testing natively.
+struct BusyCursor {
+    hwnd: winsafe::HWND,
+    old_cursor: winsafe::HCURSOR,
+}
 
 impl BusyCursor {
-    fn new() -> Self {
-        if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-            unsafe { SetCursor(hcursor.raw_copy()); }
+    fn new(hwnd: winsafe::HWND) -> Self {
+        let h_wait = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT))
+            .expect("Load wait cursor failed");
+        
+        let old_ptr = unsafe {
+            SetClassLongPtrW(hwnd.raw_copy(), GCLP_HCURSOR, h_wait.ptr() as isize)
+        };
+        
+        // Also force-set it once for the current message cycle
+        unsafe { SetCursor(h_wait.raw_copy()); }
+
+        Self {
+            hwnd: unsafe { hwnd.raw_copy() },
+            old_cursor: unsafe { winsafe::HCURSOR::from_ptr(old_ptr as _) },
         }
-        Self
     }
 }
 
 impl Drop for BusyCursor {
     fn drop(&mut self) {
-        if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
-            unsafe { SetCursor(hcursor.raw_copy()); }
+        unsafe {
+            SetClassLongPtrW(self.hwnd.raw_copy(), GCLP_HCURSOR, self.old_cursor.ptr() as isize);
+            // Restore arrow immediately
+            if let Ok(h_arrow) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
+                SetCursor(h_arrow.raw_copy());
+            }
         }
     }
 }
@@ -488,21 +509,7 @@ impl MyWindow {
             move |p| Ok(me.on_lst_nm_custom_draw(p))
         });
 
-        self.wnd.on().wm_set_cursor({
-            let me = self.clone();
-            move |p| {
-                // IMPORTANT: Only override if mouse is in Client Area and we are busy.
-                // If it's on Borders (HT::TOP, HT::RIGHT, etc.), return false to let Windows show the resize arrow.
-                if p.hit_test == co::HT::CLIENT && *me.is_busy.lock().expect("Lock failed") {
-                    if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-                        unsafe { SetCursor(hcursor.raw_copy()); }
-                    }
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-        });
+
     }
 
     fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
@@ -524,7 +531,7 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            let _busy = BusyCursor::new();
+            let _busy = BusyCursor::new(unsafe { self.wnd.hwnd().raw_copy() });
             *self.is_busy.lock().expect("Lock failed") = true;
             
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
@@ -607,7 +614,7 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            let _busy = BusyCursor::new();
+            let _busy = BusyCursor::new(unsafe { self.wnd.hwnd().raw_copy() });
             *self.is_busy.lock().expect("Lock failed") = true;
             
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
