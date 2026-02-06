@@ -918,11 +918,15 @@ impl MyWindow {
                 
                 if let Some(clr) = color {
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
+                    let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
                     unsafe {
-                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                        (*p_ptr).clrTextBk = color_ref;
                         (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
+                        // Force DC background color as well for some virtualized drivers
+                        let _ = p.mcd.hdc.SetBkColor(color_ref);
+                        let _ = p.mcd.hdc.SetTextColor(winsafe::COLORREF::from_rgb(0, 0, 0));
                     }
-                    co::CDRF::NEWFONT // Important: forces some render engines to use the specified colors
+                    co::CDRF::NEWFONT 
                 } else {
                     co::CDRF::DODEFAULT
                 }
@@ -1112,18 +1116,20 @@ fn map_packet_type(code: &str) -> String {
     let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
     let key = format!("radius-packet-types-{code}");
     let val = loader.get(&key);
-    if val == key { code.to_string() } else { val }
+    if val == key || val.contains("localization") { code.to_string() } else { val }
 }
 
 fn map_reason(code: &str) -> String {
     let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
     let key = format!("nps-reasons-{code}");
-    let val = clean_tr(&loader.get(&key));
-    if val == key { 
+    let val = loader.get(&key);
+    if val == key || val.contains("localization") { 
         clean_tr(&loader.get("ui-map-code"))
             .replace("{ $code }", code)
             .replace("{$code}", code)
-    } else { val }
+    } else { 
+        clean_tr(&val)
+    }
 }
 
 fn clean_tr(s: &str) -> String {

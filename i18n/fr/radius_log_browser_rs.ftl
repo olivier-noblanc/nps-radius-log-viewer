@@ -29,3 +29,33 @@ col-mac = MAC Client
 col-user = Utilisateur
 col-reason = Résultat/Motif
 col-session = Session ID
+
+# Packet Types
+radius-packet-types-1 = Access-Request
+radius-packet-types-2 = Access-Accept
+radius-packet-types-3 = Access-Reject
+radius-packet-types-4 = Accounting-Request
+radius-packet-types-5 = Access-Challenge
+radius-packet-types-11 = Access-Challenge
+
+# NPS Reasons
+nps-reasons-0 = Authentification réussie
+nps-reasons-1 = Erreur interne
+nps-reasons-2 = Accès refusé
+nps-reasons-3 = Requête malformée
+nps-reasons-4 = Catalogue Global indisponible
+nps-reasons-5 = Domaine indisponible
+nps-reasons-6 = Serveur indisponible
+nps-reasons-7 = Domaine inexistant
+nps-reasons-8 = Compte utilisateur inexistant
+nps-reasons-16 = Échec de l'authentification (Identifiants incorrects)
+nps-reasons-17 = Échec changement de mot de passe
+nps-reasons-18 = Type d'authentification non supporté
+nps-reasons-22 = Erreur EAP (Certificat ou poignée de main)
+nps-reasons-23 = Erreur inattendue (Config?)
+nps-reasons-34 = Compte désactivé
+nps-reasons-35 = Compte expiré
+nps-reasons-36 = Compte verrouillé
+nps-reasons-48 = Aucune stratégie ne correspond
+nps-reasons-65 = Compte distant désactivé
+nps-reasons-261 = Impossible de contacter AD
