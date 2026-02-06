@@ -231,7 +231,7 @@ impl MyWindow {
                 title: &format!("{}{}", loader.get("ui-title"), loader.get("ui-window-suffix")),
                 class_icon: gui::Icon::Id(1),
                 size: (config.window_width, config.window_height),
-                style: co::WS::CAPTION | co::WS::SYSMENU | co::WS::MINIMIZEBOX | co::WS::MAXIMIZEBOX | co::WS::SIZEBOX | co::WS::VISIBLE | co::WS::CLIPCHILDREN,
+                style: co::WS::OVERLAPPEDWINDOW | co::WS::VISIBLE | co::WS::CLIPCHILDREN,
                 ..Default::default()
             },
         );
@@ -330,9 +330,9 @@ impl MyWindow {
                 config_save.visible_columns.clone_from(&visible);
                 drop(visible);
                 
-                let rect = me.wnd.hwnd().GetWindowRect().expect("Get window rect failed");
-                config_save.window_width = rect.right - rect.left;
-                config_save.window_height = rect.bottom - rect.top;
+                let rect = me.wnd.hwnd().GetClientRect().expect("Get window rect failed");
+                config_save.window_width = rect.right;
+                config_save.window_height = rect.bottom;
                 
                 let _ = config_save.save();
                 
@@ -477,10 +477,7 @@ impl MyWindow {
         self.wnd.on().wm_set_cursor({
             let me = self.clone();
             move |p| {
-                if p.hit_test != co::HT::CLIENT {
-                    return Ok(false); // Let system handle border cursors
-                }
-                if *me.is_busy.lock().expect("Lock failed") {
+                if p.hit_test == co::HT::CLIENT && *me.is_busy.lock().expect("Lock failed") {
                     if let Ok(hcursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
                         unsafe { SetCursor(hcursor.raw_copy()); }
                     }
