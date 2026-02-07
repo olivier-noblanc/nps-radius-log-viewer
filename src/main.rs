@@ -206,6 +206,7 @@ struct MyWindow {
     btn_open:     gui::Button,
     btn_open_folder: gui::Button,
     btn_rejects:  gui::Button,
+    btn_about:    gui::Button,
     cb_append:    gui::CheckBox,
     status_bar:   gui::StatusBar,
     
@@ -290,6 +291,14 @@ impl MyWindow {
                 position: (270, 10),
                 width: 120,
                 height: 30,
+                ..Default::default()
+            }),
+            btn_about: gui::Button::new(&wnd, gui::ButtonOpts {
+                text: &loader.get("ui-about"),
+                position: (config.window_width - 130, 10),
+                width: 120,
+                height: 30,
+                resize_behavior: (gui::Horz::Repos, gui::Vert::None),
                 ..Default::default()
             }),
             cb_append:    gui::CheckBox::new(&wnd, gui::CheckBoxOpts {
@@ -473,6 +482,11 @@ impl MyWindow {
             move || me.on_btn_rejects_clicked()
         });
 
+        self.btn_about.on().bn_clicked({
+            let me = self.clone();
+            move || me.on_btn_about_clicked()
+        });
+
         self.lst_logs.on().nm_custom_draw({
             let me = self.clone();
             move |p| Ok(me.on_lst_nm_custom_draw(p))
@@ -590,6 +604,16 @@ impl MyWindow {
                 }
             });
         }
+        Ok(())
+    }
+
+    fn on_btn_about_clicked(&self) -> winsafe::AnyResult<()> {
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        self.wnd.hwnd().MessageBox(
+            &loader.get("ui-about-msg"),
+            &loader.get("ui-about"),
+            co::MB::OK | co::MB::ICONINFORMATION,
+        )?;
         Ok(())
     }
 
@@ -984,8 +1008,16 @@ impl MyWindow {
                 };
 
                 if let Some(clr) = color {
-                    let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                    let text_color = if clr == (220, 255, 220) {
+                    let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
+                    let color_ref = if is_selected {
+                        winsafe::GetSysColor(co::COLOR::HIGHLIGHT)
+                    } else {
+                        winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2)
+                    };
+
+                    let text_color = if is_selected {
+                        winsafe::GetSysColor(co::COLOR::HIGHLIGHTTEXT)
+                    } else if clr == (220, 255, 220) {
                         winsafe::COLORREF::from_rgb(0, 64, 0)
                     } else if clr == (255, 220, 220) {
                         winsafe::COLORREF::from_rgb(102, 0, 0)

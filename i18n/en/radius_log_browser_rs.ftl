@@ -20,6 +20,10 @@ ui-file-log = Log Files
 ui-file-all = All Files
 ui-window-suffix = - WinSafe Edition
 ui-map-code = Code { $code }
+ui-about = About
+ui-about-msg = RADIUS Log Browser v1.0.0
+    {"\n"}Author: Olivier Noblanc
+    {"\n"}https://github.com/olivier-noblanc/nps-radius-log-viewer
 
 col-timestamp = Timestamp
 col-type = Packet Type
