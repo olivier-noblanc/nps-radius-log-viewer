@@ -121,7 +121,7 @@ impl AppConfig {
         
         for col in &canonical_order {
             if !cfg.visible_columns.contains(col) {
-                cfg.visible_columns.push(col.clone());
+                cfg.visible_columns.push(*col);
             }
         }
 
@@ -373,7 +373,7 @@ impl MyWindow {
                     let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
 
                     // Force Explorer theme on the Header so sort arrows remain visible
-                    let h_header = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
+                    let h_header = me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}).unwrap_or(winsafe::HWND::NULL);
                     if h_header != winsafe::HWND::NULL {
                          let _ = h_header.SetWindowTheme("Explorer", None);
                     }
@@ -1102,7 +1102,7 @@ impl MyWindow {
                 }
             }
             
-            let _ = unsafe { h_header.SendMessage(msg::hdm::SetItem { index: i as _, hditem: &hdi }) };
+            unsafe { h_header.SendMessage(msg::hdm::SetItem { index: i as _, hditem: &hdi }) };
         }
     }
 }
