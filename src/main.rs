@@ -91,7 +91,7 @@ impl Default for AppConfig {
         Self {
             window_width: 900,
             window_height: 550,
-            column_widths: vec![150, 120, 120, 110, 150, 130, 150, 350, 150],
+            column_widths: vec![150, 120, 120, 110, 150, 130, 150, 150, 350, 150],
             visible_columns: LogColumn::all(),
         }
     }
@@ -115,6 +115,19 @@ impl AppConfig {
         if cfg.window_height <= 100 || cfg.window_height > screen_cy {
             cfg.window_height = 700;
         }
+        // Resync visible columns order with the canonical order (to apply the "Type + Reason" change)
+        // AND ensure any new columns (like ResponseType) are added if missing from the config file
+        let canonical_order = LogColumn::all();
+        
+        for col in &canonical_order {
+            if !cfg.visible_columns.contains(col) {
+                cfg.visible_columns.push(col.clone());
+            }
+        }
+
+        cfg.visible_columns.sort_by_key(|col| {
+            canonical_order.iter().position(|c| c == col).unwrap_or(999)
+        });
         cfg
     }
 
@@ -154,6 +167,7 @@ enum LogColumn {
     ApName,
     Mac,
     User,
+    ResponseType,
     Reason,
     Session,
 }
@@ -162,7 +176,7 @@ impl LogColumn {
     fn all() -> Vec<Self> {
         vec![
             Self::Timestamp, Self::Type, Self::Server, Self::ApIp,
-            Self::ApName, Self::Mac, Self::User, Self::Reason, Self::Session
+            Self::ApName, Self::Mac, Self::User, Self::ResponseType, Self::Reason, Self::Session
         ]
     }
 
@@ -175,6 +189,7 @@ impl LogColumn {
             Self::ApName => "col-ap-name",
             Self::Mac => "col-mac",
             Self::User => "col-user",
+            Self::ResponseType => "col-responsetype",
             Self::Reason => "col-reason",
             Self::Session => "col-session",
         }
@@ -246,7 +261,7 @@ impl MyWindow {
             lst_logs:     gui::ListView::new(&wnd, gui::ListViewOpts {
                 position: (10, 50),
                 size: (config.window_width - 20, config.window_height - 90),
-                control_style: co::LVS::REPORT | co::LVS::NOSORTHEADER | co::LVS::SHOWSELALWAYS | co::LVS::OWNERDATA,
+                control_style: co::LVS::REPORT | co::LVS::SHOWSELALWAYS | co::LVS::OWNERDATA,
                 resize_behavior: (gui::Horz::Resize, gui::Vert::Resize),
                 ..Default::default()
             }),
@@ -308,10 +323,10 @@ impl MyWindow {
         self.wnd.on().wm_close({
             let me = self.clone();
             move || {
-                let mut config_save = me.config.lock().expect("Lock failed");
-                let visible = me.visible_cols.lock().expect("Lock failed");
+                let visible = me.visible_cols.lock().expect("Lock failed").clone();
                 let all_cols = LogColumn::all();
 
+                let mut config_save = me.config.lock().expect("Lock failed");
                 for (i, &col) in visible.iter().enumerate() {
                     let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
                     unsafe {
@@ -323,7 +338,6 @@ impl MyWindow {
                     }
                 }
                 config_save.visible_columns.clone_from(&visible);
-                drop(visible);
                 
                 let rect = me.wnd.hwnd().GetClientRect().expect("Get window rect failed");
                 config_save.window_width = rect.right;
@@ -356,7 +370,7 @@ impl MyWindow {
                         style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
                     // Disable Explorer theme (switch to Classic mode) to ensure background colors work over RDP
-                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
+                    // let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
 
                     // Create Bold Font
                     let hfont = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}).unwrap_or_else(|| {
@@ -835,23 +849,8 @@ impl MyWindow {
             LogColumn::ApName => req.ap_name.clone(),
             LogColumn::Mac => req.mac.clone(),
             LogColumn::User => req.user.clone(),
-            LogColumn::Reason => {
-                use std::cell::RefCell;
-                thread_local! {
-                    static REASON_CACHE: RefCell<std::collections::HashMap<String, String>> = RefCell::new(std::collections::HashMap::new());
-                }
-                
-                REASON_CACHE.with(|cache| {
-                    let mut cache = cache.borrow_mut();
-                    if let Some(val) = cache.get(&req.reason) {
-                        val.clone()
-                    } else {
-                        let val = map_reason(&req.reason);
-                        cache.insert(req.reason.clone(), val.clone());
-                        val
-                    }
-                })
-            }
+            LogColumn::ResponseType => req.resp_type.clone(),
+            LogColumn::Reason => req.reason.clone(),
             LogColumn::Session => req.session_id.clone(),
         };
 
@@ -904,6 +903,9 @@ impl MyWindow {
             cur_sort_desc
         );
         self.lst_logs.items().set_count(self.filtered_ids.lock().expect("Lock failed").len() as _, None)?;
+        drop(sort_col_g);
+        drop(sort_desc_g);
+        self.update_headers();
         let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
         Ok(())
     }
@@ -1065,7 +1067,38 @@ impl MyWindow {
                 self.lst_logs.cols().add(&text, width).expect("Add col failed");
             }
         }
+        self.update_headers();
         let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
+    }
+    fn update_headers(&self) {
+        let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
+        if h_header == winsafe::HWND::NULL { return; }
+
+        let (visible, sort_col, sort_desc) = {
+            let v = self.visible_cols.lock().expect("Lock failed").clone();
+            let sc = *self.sort_col.lock().expect("Lock failed");
+            let sd = *self.sort_desc.lock().expect("Lock failed");
+            (v, sc, sd)
+        };
+
+        let count = unsafe { h_header.SendMessage(msg::hdm::GetItemCount {}) }.unwrap_or(0);
+
+        for i in 0..count {
+            let mut hdi = winsafe::HDITEM::default();
+            hdi.mask = co::HDI::FORMAT;
+            
+            unsafe { h_header.SendMessage(msg::hdm::GetItem { index: i as _, hditem: &mut hdi }) };
+            
+            hdi.fmt &= !(co::HDF::SORTUP | co::HDF::SORTDOWN); // Clear existing sort flags
+            
+            if let Some(&col) = visible.get(i as usize) {
+                if col == sort_col {
+                    hdi.fmt |= if sort_desc { co::HDF::SORTDOWN } else { co::HDF::SORTUP };
+                }
+            }
+            
+            let _ = unsafe { h_header.SendMessage(msg::hdm::SetItem { index: i as _, hditem: &hdi }) };
+        }
     }
 }
 
@@ -1110,7 +1143,7 @@ fn apply_filter_logic(
             .collect();
 
         // Sorting
-        ids.par_sort_unstable_by(|&a_idx, &b_idx| {
+        ids.sort_unstable_by(|&a_idx, &b_idx| {
             let a = &items[a_idx];
             let b = &items[b_idx];
             let ord = match sort_col {
@@ -1121,6 +1154,7 @@ fn apply_filter_logic(
                 LogColumn::ApName => a.ap_name.cmp(&b.ap_name),
                 LogColumn::Mac => a.mac.cmp(&b.mac),
                 LogColumn::User => a.user.cmp(&b.user),
+                LogColumn::ResponseType => a.resp_type.cmp(&b.resp_type),
                 LogColumn::Reason => {
                     let r_a = if a.reason.is_empty() { &a.resp_type } else { &a.reason };
                     let r_b = if b.reason.is_empty() { &b.resp_type } else { &b.reason };
@@ -1221,8 +1255,13 @@ fn process_group(group: &[Event]) -> RadiusRequest {
                 req.user = loader.get("ui-unknown-user"); 
             }
         } else {
-            req.resp_type = map_packet_type(p_type);
-            req.reason = map_reason(event.reason_code.as_deref().unwrap_or("0"));
+            let this_resp_type = map_packet_type(p_type);
+            let code = event.reason_code.as_deref().unwrap_or("0");
+            // If this is a better reason (error vs success) or we have nothing yet
+            if req.reason.is_empty() || code != "0" {
+                 req.resp_type = this_resp_type.clone();
+                 req.reason = map_reason(code);
+            }
             match p_type {
                 "2" => req.bg_color = Some((220, 255, 220)), // Pastel light green
                 "3" => req.bg_color = Some((255, 220, 220)), // Pastel light red
@@ -1234,28 +1273,112 @@ fn process_group(group: &[Event]) -> RadiusRequest {
 }
 
 fn map_packet_type(code: &str) -> String {
-    let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-    let key = format!("radius-packet-types-{code}");
-    let val = loader.get(&key);
-    // Case-insensitive check for common missing localization signals
-    if val == key || val.to_lowercase().contains("localization") { 
-        code.to_string() 
-    } else { 
-        val 
+    match code {
+        "1" => "Access-Request".to_string(),
+        "2" => "Access-Accept".to_string(),
+        "3" => "Access-Reject".to_string(),
+        "4" => "Accounting-Request".to_string(),
+        "5" => "Accounting-Response".to_string(),
+        "11" => "Access-Challenge".to_string(),
+        _ => format!("Type {code}"),
     }
 }
 
 fn map_reason(code: &str) -> String {
-    let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-    let key = format!("nps-reasons-{code}");
-    let val = loader.get(&key);
-    // Case-insensitive check for common missing localization signals
-    if val == key || val.to_lowercase().contains("localization") { 
-        clean_tr(&loader.get("ui-map-code"))
-            .replace("{ $code }", code)
-            .replace("{$code}", code)
-    } else { 
-        clean_tr(&val)
+    match code {
+        "0" => "The connection request was successfully authenticated and authorized by Network Policy Server.".to_string(),
+        "1" => "The connection request failed due to a Network Policy Server error.".to_string(),
+        "2" => "There are insufficient access rights to process the request.".to_string(),
+        "3" => "The Remote Authentication Dial-In User Service (RADIUS) Access-Request message that NPS received from the network access server was malformed.".to_string(),
+        "4" => "The NPS server was unable to access the Active Directory Domain Services (AD DS) global catalog.".to_string(),
+        "5" => "The Network Policy Server was unable to connect to a domain controller in the domain where the user account is located.".to_string(),
+        "6" => "The NPS server is unavailable. This issue can occur if the NPS server is running low on or is out of random access memory (RAM).".to_string(),
+        "7" => "The domain that is specified in the User-Name attribute of the RADIUS message does not exist.".to_string(),
+        "8" => "The user account that is specified in the User-Name attribute of the RADIUS message does not exist.".to_string(),
+        "9" => "An Internet Authentication Service (IAS) extension dynamic link library (DLL) that is installed on the NPS server discarded the connection request.".to_string(),
+        "10" => "An IAS extension dynamic link library (DLL) that is installed on the NPS server has failed and cannot perform its function.".to_string(),
+        "16" => "Authentication failed due to a user credentials mismatch. Either the user name provided does not match an existing user account or the password was incorrect.".to_string(),
+        "17" => "The user's attempt to change their password has failed.".to_string(),
+        "18" => "The authentication method used by the client computer is not supported by Network Policy Server for this connection.".to_string(),
+        "20" => "The client attempted to use LAN Manager authentication, which is not supported by Network Policy Server.".to_string(),
+        "21" => "An IAS extension dynamic link library (DLL) that is installed on the NPS server rejected the connection request.".to_string(),
+        "22" => "Network Policy Server was unable to negotiate the use of an Extensible Authentication Protocol (EAP) type with the client computer.".to_string(),
+        "23" => "An error occurred during the Network Policy Server use of the Extensible Authentication Protocol (EAP).".to_string(),
+        "32" => "NPS is joined to a workgroup and performs the authentication and authorization of connection requests using the local SAM database.".to_string(),
+        "33" => "The user that is attempting to connect to the network must change their password.".to_string(),
+        "34" => "The user account that is specified in the RADIUS Access-Request message is disabled.".to_string(),
+        "35" => "The user account that is specified in the RADIUS Access-Request message is expired.".to_string(),
+        "36" => "The user's authentication attempts have exceeded the maximum allowed number of failed attempts.".to_string(),
+        "37" => "According to AD DS user account logon hours, the user is not permitted to access the network on this day and time.".to_string(),
+        "38" => "Authentication failed due to a user account restriction or requirement that was not followed.".to_string(),
+        "48" => "The connection request did not match a configured network policy, so the connection request was denied by Network Policy Server.".to_string(),
+        "49" => "The connection request did not match a configured connection request policy, so the connection request was denied by Network Policy Server.".to_string(),
+        "64" => "Remote Access Account Lockout is enabled, and the user's authentication attempts have exceeded the designated lockout count.".to_string(),
+        "65" => "The Network Access Permission setting in the dial-in properties of the user account is set to Deny access to the user.".to_string(),
+        "66" => "Authentication failed. Either the client computer attempted to use an authentication method that is not enabled on the matching network policy or the client computer attempted to authenticate as Guest.".to_string(),
+        "67" => "NPS denied the connection request because the value of the Calling-Station-ID attribute did not match the value of Verify Caller ID.".to_string(),
+        "68" => "The user or computer does not have permission to access the network on this day at this time.".to_string(),
+        "69" => "The telephone number of the network access server does not match the value of the Calling-Station-ID attribute.".to_string(),
+        "70" => "The network access method used by the access client to connect to the network does not match the value of the NAS-Port-Type attribute.".to_string(),
+        "72" => "The user password has expired or is about to expire and the user must change their password.".to_string(),
+        "73" => "The purposes that are configured in the Application Policies extensions of the user or computer certificate are not valid or are missing.".to_string(),
+        "80" => "NPS attempted to write accounting data to the data store, but failed to do so for unknown reasons.".to_string(),
+        "96" => "Authentication failed due to an Extensible Authentication Protocol (EAP) session timeout.".to_string(),
+        "97" => "The authentication request was not processed because it contained a RADIUS message that was not appropriate for the secure authentication transaction.".to_string(),
+        "112" => "The local NPS proxy server forwarded a connection request to a remote RADIUS server, and the remote server rejected the connection request.".to_string(),
+        "113" => "The local NPS proxy attempted to forward a connection request to a member of a remote RADIUS server group that does not exist.".to_string(),
+        "115" => "The local NPS proxy did not forward a RADIUS message because it is not an accounting request or a connection request.".to_string(),
+        "116" => "The local NPS proxy server cannot forward the connection request to the remote RADIUS server (Socket error).".to_string(),
+        "117" => "The remote RADIUS server did not respond to the local NPS proxy within an acceptable time period.".to_string(),
+        "118" => "The local NPS proxy server received a RADIUS message that is malformed from a remote RADIUS server.".to_string(),
+        "256" => "The certificate provided by the user or computer as proof of their identity is a revoked certificate.".to_string(),
+        "257" => "NPS cannot access the certificate revocation list to verify whether the user or client computer certificate is valid or is revoked (Missing DLL).".to_string(),
+        "258" => "NPS cannot access the certificate revocation list to verify whether the user or client computer certificate is valid or is revoked.".to_string(),
+        "259" => "The certification authority that manages the certificate revocation list is not available.".to_string(),
+        "260" => "The EAP message has been altered so that the MD5 hash of the entire RADIUS message does not match.".to_string(),
+        "261" => "NPS cannot contact Active Directory Domain Services (AD DS) or the local user accounts database.".to_string(),
+        "262" => "NPS discarded the RADIUS message because it is incomplete and the signature was not verified.".to_string(),
+        "263" => "NPS did not receive complete credentials from the user or computer.".to_string(),
+        "264" => "The SSPI called by EAP reports that the system clocks on the NPS server and the access client are not synchronized.".to_string(),
+        "265" => "The certificate that the user or client computer provided to NPS chains to an enterprise root CA that is not trusted by the NPS server.".to_string(),
+        "266" => "NPS received a message that was either unexpected or incorrectly formatted.".to_string(),
+        "267" => "The certificate provided by the connecting user or computer is not valid (Missing Client Authentication purpose).".to_string(),
+        "268" => "The certificate provided by the connecting user or computer is expired.".to_string(),
+        "269" => "The SSPI called by EAP reports that the NPS server and the access client cannot communicate because they do not possess a common algorithm.".to_string(),
+        "270" => "The user is required to log on with a smart card, but they have attempted to log on by using other credentials.".to_string(),
+        "271" => "The connection request was not processed because the NPS server was in the process of shutting down or restarting.".to_string(),
+        "272" => "The certificate implies multiple user or computer accounts rather than one account.".to_string(),
+        "273" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider is not recognized.".to_string(),
+        "274" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider does not support the specified action.".to_string(),
+        "275" => "Authentication failed. NPS called Windows Trust Verification Services, and the trust provider does not support the specified form.".to_string(),
+        "276" => "Authentication failed. The binary file that calls EAP cannot be verified and is not trusted.".to_string(),
+        "277" => "Authentication failed. The binary file that calls EAP is not signed, or the signer certificate cannot be found.".to_string(),
+        "278" => "Authentication failed. The certificate that was provided by the connecting user or computer is expired.".to_string(),
+        "279" => "Authentication failed. The certificate is not valid because the validity periods of certificates in the chain do not match.".to_string(),
+        "280" => "Authentication failed. The certificate is not valid and was not issued by a valid certification authority (CA).".to_string(),
+        "281" => "Authentication failed. The path length constraint in the certification chain has been exceeded.".to_string(),
+        "282" => "Authentication failed. The certificate contains a critical extension that is unrecognized by NPS.".to_string(),
+        "283" => "Authentication failed. The certificate does not contain the Client Authentication purpose in Application Policies extensions.".to_string(),
+        "284" => "Authentication failed. The certificate issuer and the parent of the certificate in the certificate chain do not match.".to_string(),
+        "285" => "Authentication failed. NPS cannot locate the certificate, or the certificate is incorrectly formed.".to_string(),
+        "286" => "Authentication failed. The CA is not trusted by the NPS server.".to_string(),
+        "287" => "Authentication failed. The certificate does not chain to an enterprise root CA that NPS trusts.".to_string(),
+        "288" => "Authentication failed due to an unspecified trust failure.".to_string(),
+        "289" => "Authentication failed. The certificate provided by the connecting user or computer is revoked.".to_string(),
+        "290" => "Authentication failed. A test or trial certificate is in use, however the test root CA is not trusted.".to_string(),
+        "291" => "Authentication failed because NPS cannot locate and access the certificate revocation list.".to_string(),
+        "292" => "Authentication failed. The User-Name attribute does not match the CN in the certificate.".to_string(),
+        "293" => "Authentication failed. The certificate is not configured with the Client Authentication purpose.".to_string(),
+        "294" => "Authentication failed because the certificate was explicitly marked as untrusted by the Administrator.".to_string(),
+        "295" => "Authentication failed. The CA is not trusted by the NPS server.".to_string(),
+        "296" => "Authentication failed. The certificate is not configured with the Client Authentication purpose.".to_string(),
+        "297" => "Authentication failed. The certificate does not have a valid name.".to_string(),
+        "298" => "Authentication failed. Either the certificate does not contain a valid UPN or the User-Name does not match.".to_string(),
+        "299" => "Authentication failed. The sequence of information provided by internal components or protocols is incorrect.".to_string(),
+        "300" => "Authentication failed. The certificate is malformed and EAP cannot locate credential information.".to_string(),
+        "301" => "NPS terminated the authentication process. Invalid crypto-binding TLV (Potential Man-in-the-Middle).".to_string(),
+        "302" => "NPS terminated the authentication process. Missing crypto-binding TLV.".to_string(),
+        _ => format!("Code {code}")
     }
 }
 

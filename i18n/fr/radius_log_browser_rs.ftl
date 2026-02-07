@@ -23,12 +23,13 @@ ui-map-code = Code { $code }
 
 col-timestamp = Horodatage
 col-type = Type de Paquet
-col-server = Serveur
-col-ap-ip = IP AP
-col-ap-name = Nom AP
-col-mac = MAC Client
-col-user = Utilisateur
-col-reason = Résultat/Motif
+col-server = NAP Server
+col-responsetype = Response Type
+col-ap-ip = Access Point IP
+col-ap-name = Access Point Name
+col-mac = MAC Address Requester
+col-user = SAM Account Name
+col-reason = Reason Code
 col-session = Session ID
 
 # Packet Types

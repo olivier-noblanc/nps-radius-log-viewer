@@ -1,25 +1,25 @@
 {
-  "window_width": 1382,
-  "window_height": 777,
+  "window_width": 1920,
+  "window_height": 991,
   "column_widths": [
     167,
     115,
     139,
     93,
-    329,
+    93,
     141,
     191,
-    206,
-    150
+    130,
+    645
   ],
   "visible_columns": [
     "Timestamp",
     "Type",
-    "Server",
     "ApIp",
     "ApName",
     "Mac",
     "User",
+    "ResponseType",
     "Reason"
   ]
 }
