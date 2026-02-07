@@ -992,8 +992,8 @@ impl MyWindow {
                 if let Some(clr) = color {
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
-                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
+                        std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2));
+                        std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(0, 0, 0));
                         
                         if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
                             let _ = p.mcd.hdc.SelectObject(&**hfont_guard);

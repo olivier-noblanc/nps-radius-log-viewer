@@ -1,6 +1,7 @@
 ---
-trigger: always_on
-glob:
-description:
+trigger: glob
+description: working on rust
+globs: *.rs
 ---
 
+lint before build or commit
