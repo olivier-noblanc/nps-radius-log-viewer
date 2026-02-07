@@ -11,6 +11,7 @@ ui-status-error = Erreur lors du chargement.
 ui-status-loading = Chargement...
 ui-status-loading-folder = Chargement du répertoire...
 ui-menu-copy-cell = 📋 Copier la cellule
+ui-menu-copy-row = 📋 Copier la ligne entière
 ui-menu-filter-cell = 🔍 Filtrer par cette valeur
 ui-btn-show-all = ⚠️ Tout afficher
 ui-btn-errors-only = ⚠️ Erreurs

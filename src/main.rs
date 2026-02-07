@@ -189,7 +189,6 @@ struct MyWindow {
     btn_open_folder: gui::Button,
     btn_rejects:  gui::Button,
     cb_append:    gui::CheckBox,
-    btn_copy:     gui::Button,
     status_bar:   gui::StatusBar,
     
     all_items:    Arc<Mutex<Vec<RadiusRequest>>>,
@@ -260,13 +259,6 @@ impl MyWindow {
                 text: &loader.get("ui-append"),
                 position: (560, 14),
                 size: (80, 20),
-                ..Default::default()
-            }),
-            btn_copy:     gui::Button::new(&wnd, gui::ButtonOpts {
-                text: &loader.get("ui-copy"),
-                position: (650, 10),
-                width: 120,
-                height: 30,
                 ..Default::default()
             }),
             status_bar:   gui::StatusBar::new(&wnd, &[
@@ -441,11 +433,6 @@ impl MyWindow {
         self.btn_rejects.on().bn_clicked({
             let me = self.clone();
             move || me.on_btn_rejects_clicked()
-        });
-
-        self.btn_copy.on().bn_clicked({
-            let me = self.clone();
-            move || me.on_btn_copy_clicked()
         });
 
         self.lst_logs.on().nm_custom_draw({
@@ -671,16 +658,28 @@ impl MyWindow {
                 let h_menu = winsafe::HMENU::CreatePopupMenu()?;
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str(&clean_tr(&loader.get("ui-menu-copy-cell"))))?;
+                h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1003), winsafe::BmpPtrStr::from_str(&clean_tr(&loader.get("ui-menu-copy-row"))))?;
                 h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str(&clean_tr(&loader.get("ui-menu-filter-cell"))))?;
 
                 if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, pt_screen, self.lst_logs.hwnd())? {
-                    let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
                     match cmd_id {
-                        1001 => { let _ = clipboard_win::set_clipboard_string(&cell_text); },
+                        1001 => { 
+                            let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
+                            let _ = clipboard_win::set_clipboard_string(&cell_text); 
+                        },
                         1002 => {
+                            let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
                             let _ = self.txt_search.hwnd().SetWindowText(&cell_text);
                             self.on_txt_search_en_change()?;
                         },
+                        1003 => {
+                            let items = self.all_items.lock().expect("Lock failed");
+                            let ids = self.filtered_ids.lock().expect("Lock failed");
+                            if let Some(&idx) = ids.get(lvhti.iItem as usize) {
+                                let tsv = items[idx].to_tsv();
+                                let _ = clipboard_win::set_clipboard_string(&tsv);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -888,18 +887,6 @@ impl MyWindow {
         Ok(())
     }
 
-    #[allow(clippy::unnecessary_wraps)]
-    fn on_btn_copy_clicked(&self) -> winsafe::AnyResult<()> {
-        if let Some(iitem) = self.lst_logs.items().iter_selected().next() {
-            let items = self.all_items.lock().expect("Lock failed");
-            let ids = self.filtered_ids.lock().expect("Lock failed");
-            if let Some(&idx) = ids.get(iitem.index() as usize) {
-                let tsv = items[idx].to_tsv();
-                let _ = clipboard_win::set_clipboard_string(&tsv);
-            }
-        }
-        Ok(())
-    }
 
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
