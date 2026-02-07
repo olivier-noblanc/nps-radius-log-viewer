@@ -982,69 +982,39 @@ impl MyWindow {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
             co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
             _ if p.mcd.dwDrawStage.raw() == (co::CDDS::ITEMPREPAINT.raw() | co::CDDS::SUBITEM.raw()) => {
-                let (color, text) = {
+                let color = {
                     let items = self.all_items.lock().expect("Lock failed");
                     let ids = self.filtered_ids.lock().expect("Lock failed");
-                    let visible = self.visible_cols.lock().expect("Lock failed");
-                    
-                    if let (Some(&idx), Some(&col)) = (ids.get(p.mcd.dwItemSpec), visible.get(p.iSubItem as usize)) {
-                        let item = &items[idx];
-                        let txt = match col {
-                            LogColumn::Timestamp => item.timestamp.clone(),
-                            LogColumn::Type => item.req_type.clone(),
-                            LogColumn::Server => item.server.clone(),
-                            LogColumn::ApIp => item.ap_ip.clone(),
-                            LogColumn::ApName => item.ap_name.clone(),
-                            LogColumn::Mac => item.mac.clone(),
-                            LogColumn::User => item.user.clone(),
-                            LogColumn::ResponseType => item.resp_type.clone(),
-                            LogColumn::Reason => if item.reason.is_empty() { item.resp_type.clone() } else { item.reason.clone() },
-                            LogColumn::Session => item.session_id.clone(),
-                        };
-                        (item.bg_color, txt)
-                    } else {
-                        (None, String::new())
-                    }
+                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
                 };
 
                 if let Some(clr) = color {
                     let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
-                    let color_ref = if is_selected {
-                        winsafe::GetSysColor(co::COLOR::HIGHLIGHT)
-                    } else {
-                        winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2)
-                    };
-
-                    let text_color = if is_selected {
-                        winsafe::GetSysColor(co::COLOR::HIGHLIGHTTEXT)
-                    } else if clr == (220, 255, 220) {
-                        winsafe::COLORREF::from_rgb(0, 64, 0)
-                    } else if clr == (255, 220, 220) {
-                        winsafe::COLORREF::from_rgb(102, 0, 0)
-                    } else {
-                        winsafe::COLORREF::from_rgb(0, 0, 0)
-                    };
-
-                    // 1. Draw Background
-                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
-                    }
-
-                    // 2. Prepare HDC for Text
-                    let _ = p.mcd.hdc.SetBkMode(co::BKMODE::TRANSPARENT);
-                    let _ = p.mcd.hdc.SetTextColor(text_color);
                     
-                    if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
-                        let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                    let (bg, fg) = if is_selected {
+                        (winsafe::GetSysColor(co::COLOR::HIGHLIGHT), winsafe::GetSysColor(co::COLOR::HIGHLIGHTTEXT))
+                    } else {
+                        let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                        let fg = if clr == (220, 255, 220) {
+                            winsafe::COLORREF::from_rgb(0, 64, 0)
+                        } else if clr == (255, 220, 220) {
+                            winsafe::COLORREF::from_rgb(102, 0, 0)
+                        } else {
+                            winsafe::COLORREF::from_rgb(0, 0, 0)
+                        };
+                        (bg, fg)
+                    };
+
+                    let p_ptr = std::ptr::from_ref(p).cast_mut();
+                    unsafe {
+                        (*p_ptr).clrTextBk = bg;
+                        (*p_ptr).clrText = fg;
+                        
+                        if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                            let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                        }
                     }
-
-                    // 3. Draw Text Manually
-                    let mut rc = p.mcd.rc;
-                    rc.left += 6; // Padding
-                    let _ = p.mcd.hdc.DrawText(&text, rc, co::DT::SINGLELINE | co::DT::VCENTER | co::DT::END_ELLIPSIS | co::DT::NOPREFIX);
-
-                    // 4. Tell Windows we did everything
-                    co::CDRF::SKIPDEFAULT
+                    co::CDRF::NEWFONT
                 } else {
                     co::CDRF::DODEFAULT
                 }
@@ -1058,13 +1028,13 @@ impl MyWindow {
     }
 
     fn refresh_columns(&self) {
-        // Disable Explorer theme (switch to Classic mode) on the ListView itself to ensure background colors work correctly
+        // Disable Explorer theme (switch to Classic mode) on the ListView itself
         let _ = self.lst_logs.hwnd().SetWindowTheme(" ", None);
 
-        // Force Explorer theme on the Header so sort arrows remain visible
+        // Disable Explorer theme on the Header too
         let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
         if h_header != winsafe::HWND::NULL {
-             let _ = h_header.SetWindowTheme("Explorer", None);
+             let _ = h_header.SetWindowTheme(" ", None);
         }
 
         while self.lst_logs.cols().count().unwrap_or(0) > 0 {
@@ -1089,9 +1059,6 @@ impl MyWindow {
         let _ = self.lst_logs.hwnd().InvalidateRect(None, true);
     }
     fn update_headers(&self) {
-        let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
-        if h_header == winsafe::HWND::NULL { return; }
-
         let (visible, sort_col, sort_desc) = {
             let v = self.visible_cols.lock().expect("Lock failed").clone();
             let sc = *self.sort_col.lock().expect("Lock failed");
@@ -1099,23 +1066,26 @@ impl MyWindow {
             (v, sc, sd)
         };
 
-        let count = unsafe { h_header.SendMessage(msg::hdm::GetItemCount {}) }.unwrap_or(0);
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
 
-        for i in 0..count {
-            let mut hdi = winsafe::HDITEM::default();
-            hdi.mask = co::HDI::FORMAT;
-            
-            unsafe { h_header.SendMessage(msg::hdm::GetItem { index: i as _, hditem: &mut hdi }) };
-            
-            hdi.fmt &= !(co::HDF::SORTUP | co::HDF::SORTDOWN); // Clear existing sort flags
-            
-            if let Some(&col) = visible.get(i as usize) {
-                if col == sort_col {
-                    hdi.fmt |= if sort_desc { co::HDF::SORTDOWN } else { co::HDF::SORTUP };
-                }
+        for (i, &col) in visible.iter().enumerate() {
+            let mut text = clean_tr(&loader.get(col.ftl_key()));
+            if col == sort_col {
+                text.push(' ');
+                text.push(if sort_desc { '▼' } else { '▲' });
             }
-            
-            unsafe { h_header.SendMessage(msg::hdm::SetItem { index: i as _, hditem: &hdi }) };
+
+            let mut lvc = winsafe::LVCOLUMN::default();
+            lvc.mask = co::LVCF::TEXT;
+            let mut wtext = winsafe::WString::from_str(&text);
+            lvc.set_pszText(Some(&mut wtext));
+
+            unsafe {
+                let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::SetColumn {
+                    index: i as u32,
+                    lvcolumn: &lvc,
+                });
+            }
         }
     }
 }
