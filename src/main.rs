@@ -916,11 +916,21 @@ impl MyWindow {
                         let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
                     }
 
+                    // Select Bold Font
+                    if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                        let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                    }
+
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
-                        // Use Black/White for better contrast
-                        let text_color = if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
+                        
+                        // Use dark colors for better contrast and requested style
+                        let text_color = if clr == (204, 255, 204) {
+                            winsafe::COLORREF::from_rgb(0, 100, 0) // Dark Green
+                        } else if clr == (255, 204, 204) {
+                            winsafe::COLORREF::from_rgb(150, 0, 0) // Dark Red
+                        } else if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
                             winsafe::COLORREF::from_rgb(0, 0, 0)
                         } else {
                             winsafe::COLORREF::from_rgb(255, 255, 255)
@@ -944,10 +954,21 @@ impl MyWindow {
                 
                 if let Some(clr) = color {
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                    
+                    // Select Bold Font for subitems too
+                    if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                        let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                    }
+
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
-                        let text_color = if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
+                        
+                        let text_color = if clr == (204, 255, 204) {
+                            winsafe::COLORREF::from_rgb(0, 100, 0) // Dark Green
+                        } else if clr == (255, 204, 204) {
+                            winsafe::COLORREF::from_rgb(150, 0, 0) // Dark Red
+                        } else if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
                             winsafe::COLORREF::from_rgb(0, 0, 0)
                         } else {
                             winsafe::COLORREF::from_rgb(255, 255, 255)
