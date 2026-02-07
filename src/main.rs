@@ -378,6 +378,7 @@ impl MyWindow {
                         mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                         style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
+                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("Explorer", None);
                 }
 
                 // Create Bold Font
@@ -980,57 +981,25 @@ impl MyWindow {
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
-            co::CDDS::ITEMPREPAINT => {
+            co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
+            _ if p.mcd.dwDrawStage == co::CDDS::ITEMPREPAINT | co::CDDS::SUBITEM => {
                 let color = {
                     let items = self.all_items.lock().expect("Lock failed");
                     let ids = self.filtered_ids.lock().expect("Lock failed");
                     ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
                 };
-
+                
                 if let Some(clr) = color {
-                    let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
-                    if !is_selected {
-                        let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                            let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
+                    let p_ptr = std::ptr::from_ref(p).cast_mut();
+                    unsafe {
+                        (*p_ptr).clrTextBk = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                        (*p_ptr).clrText = winsafe::COLORREF::from_rgb(0, 0, 0);
+                        
+                        if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                            let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
                         }
-                        return unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw() | co::CDRF::SKIPDEFAULT.raw()) };
                     }
-                }
-                co::CDRF::NOTIFYSUBITEMDRAW
-            },
-            _ if p.mcd.dwDrawStage.raw() == (co::CDDS::ITEMPREPAINT.raw() | co::CDDS::SUBITEM.raw()) => {
-                let color = {
-                    let items = self.all_items.lock().expect("Lock failed");
-                    let ids = self.filtered_ids.lock().expect("Lock failed");
-                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
-                };
-
-                if let Some(clr) = color {
-                    let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
-                    if is_selected {
-                         co::CDRF::DODEFAULT
-                    } else {
-                        let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        let fg = if clr == (220, 255, 220) {
-                            winsafe::COLORREF::from_rgb(0, 64, 0)
-                        } else if clr == (255, 220, 220) {
-                            winsafe::COLORREF::from_rgb(102, 0, 0)
-                        } else {
-                            winsafe::COLORREF::from_rgb(0, 0, 0)
-                        };
-
-                        let p_ptr = std::ptr::from_ref(p).cast_mut();
-                        unsafe {
-                            (*p_ptr).clrTextBk = bg;
-                            (*p_ptr).clrText = fg;
-                            
-                            if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
-                                let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
-                            }
-                        }
-                        co::CDRF::NEWFONT
-                    }
+                    co::CDRF::NEWFONT
                 } else {
                     co::CDRF::DODEFAULT
                 }
@@ -1258,8 +1227,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
                  req.reason = map_reason(code);
             }
             match p_type {
-                "2" => req.bg_color = Some((220, 255, 220)), // Pastel light green
-                "3" => req.bg_color = Some((255, 220, 220)), // Pastel light red
+                "2" => req.bg_color = Some((188, 255, 188)),
+                "3" => req.bg_color = Some((255, 188, 188)),
                 _ => {},
             }
         }
