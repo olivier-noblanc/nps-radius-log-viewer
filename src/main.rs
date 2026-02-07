@@ -958,10 +958,29 @@ impl MyWindow {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
             co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
             _ if p.mcd.dwDrawStage.raw() == (co::CDDS::ITEMPREPAINT.raw() | co::CDDS::SUBITEM.raw()) => {
-                let color = {
+                let (color, text) = {
                     let items = self.all_items.lock().expect("Lock failed");
                     let ids = self.filtered_ids.lock().expect("Lock failed");
-                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
+                    let visible = self.visible_cols.lock().expect("Lock failed");
+                    
+                    if let (Some(&idx), Some(&col)) = (ids.get(p.mcd.dwItemSpec), visible.get(p.iSubItem as usize)) {
+                        let item = &items[idx];
+                        let txt = match col {
+                            LogColumn::Timestamp => item.timestamp.clone(),
+                            LogColumn::Type => item.req_type.clone(),
+                            LogColumn::Server => item.server.clone(),
+                            LogColumn::ApIp => item.ap_ip.clone(),
+                            LogColumn::ApName => item.ap_name.clone(),
+                            LogColumn::Mac => item.mac.clone(),
+                            LogColumn::User => item.user.clone(),
+                            LogColumn::ResponseType => item.resp_type.clone(),
+                            LogColumn::Reason => if item.reason.is_empty() { item.resp_type.clone() } else { item.reason.clone() },
+                            LogColumn::Session => item.session_id.clone(),
+                        };
+                        (item.bg_color, txt)
+                    } else {
+                        (None, String::new())
+                    }
                 };
 
                 if let Some(clr) = color {
@@ -974,17 +993,26 @@ impl MyWindow {
                         winsafe::COLORREF::from_rgb(0, 0, 0)
                     };
 
-                    let p_ptr = std::ptr::from_ref(p).cast_mut();
-                    unsafe {
-                        (*p_ptr).clrTextBk = color_ref;
-                        (*p_ptr).clrText = text_color;
-                        
-                        // Select Bold Font
-                        if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
-                            let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
-                        }
+                    // 1. Draw Background
+                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
                     }
-                    co::CDRF::NEWFONT
+
+                    // 2. Prepare HDC for Text
+                    let _ = p.mcd.hdc.SetBkMode(co::BKMODE::TRANSPARENT);
+                    let _ = p.mcd.hdc.SetTextColor(text_color);
+                    
+                    if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                        let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                    }
+
+                    // 3. Draw Text Manually
+                    let mut rc = p.mcd.rc;
+                    rc.left += 6; // Padding
+                    let _ = p.mcd.hdc.DrawText(&text, rc, co::DT::SINGLELINE | co::DT::VCENTER | co::DT::END_ELLIPSIS | co::DT::NOPREFIX);
+
+                    // 4. Tell Windows we did everything
+                    co::CDRF::SKIPDEFAULT
                 } else {
                     co::CDRF::DODEFAULT
                 }
