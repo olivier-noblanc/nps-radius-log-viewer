@@ -1,5 +1,6 @@
 [default.extend-words]
 asInvoker = "asInvoker"
 
+
 [files]
 extend-exclude = ["patches/**/*", "i18n/**/*.ftl"]

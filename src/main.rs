@@ -360,7 +360,7 @@ impl MyWindow {
 
                     // Create Bold Font
                     let hfont = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}).unwrap_or_else(|| {
-                        winsafe::HFONT::GetStockObject(co::STOCK_FONT::DEFAULT_GUI).unwrap()
+                        winsafe::HFONT::GetStockObject(co::STOCK_FONT::DEFAULT_GUI).expect("Failed to get default GUI font")
                     });
                     
                     let mut lf = hfont.GetObject().unwrap_or_default();

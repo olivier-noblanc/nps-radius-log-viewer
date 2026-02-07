@@ -16,7 +16,7 @@ fn main() -> io::Result<()> {
     res.set("InternalName", "radius-log-browser-rs");
     res.set("Comments", "https://github.com/olivier-noblanc/nps-radius-log-viewer");
     
-    // AJOUT DU MANIFESTE : Informe Windows que le binaire est "Standard" (asInvoker)
+    // ADDING MANIFEST: Informs Windows that the binary is "Standard" (asInvoker)
     res.set_manifest(r#"
     <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
         <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
