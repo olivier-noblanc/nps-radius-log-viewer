@@ -369,26 +369,17 @@ impl MyWindow {
                         mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                         style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
-                    // Disable Explorer theme (switch to Classic mode) on the ListView itself to ensure background colors work correctly
-                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
+                }
 
-                    // Force Explorer theme on the Header so sort arrows remain visible
-                    let h_header = me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}).unwrap_or(winsafe::HWND::NULL);
-                    if h_header != winsafe::HWND::NULL {
-                         let _ = h_header.SetWindowTheme("Explorer", None);
-                    }
-
-                    // Create Bold Font
-                    let hfont = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}).unwrap_or_else(|| {
-                        winsafe::HFONT::GetStockObject(co::STOCK_FONT::DEFAULT_GUI).expect("Failed to get default GUI font")
-                    });
-                    
-                    let mut lf = hfont.GetObject().unwrap_or_default();
-                    lf.lfWeight = co::FW::BOLD;
-                    if let Ok(hfont_bold) = winsafe::HFONT::CreateFontIndirect(&lf) {
-                        *me.bold_font.lock().expect("Lock failed") = Some(hfont_bold);
-                    }
-
+                // Create Bold Font
+                let hfont = unsafe { me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}).unwrap_or_else(|| {
+                    winsafe::HFONT::GetStockObject(co::STOCK_FONT::DEFAULT_GUI).expect("Failed to get default GUI font")
+                }) };
+                
+                let mut lf = hfont.GetObject().unwrap_or_default();
+                lf.lfWeight = co::FW::BOLD;
+                if let Ok(hfont_bold) = winsafe::HFONT::CreateFontIndirect(&lf) {
+                    *me.bold_font.lock().expect("Lock failed") = Some(hfont_bold);
                 }
                 
                 // Initializing columns dynamically
@@ -1000,6 +991,7 @@ impl MyWindow {
                         };
                         (*p_ptr).clrText = text_color;
                         
+                        let _ = p.mcd.hdc.SetBkColor(color_ref);
                         let _ = p.mcd.hdc.SetTextColor(text_color);
                     }
                     unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
@@ -1054,6 +1046,14 @@ impl MyWindow {
     }
 
     fn refresh_columns(&self) {
+        // Disable Explorer theme (switch to Classic mode) on the ListView itself to ensure background colors work correctly
+        let _ = self.lst_logs.hwnd().SetWindowTheme("", None);
+        // Force Explorer theme on the Header so sort arrows remain visible
+        let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
+        if h_header != winsafe::HWND::NULL {
+             let _ = h_header.SetWindowTheme("Explorer", None);
+        }
+
         while self.lst_logs.cols().count().unwrap_or(0) > 0 {
             unsafe {
                 let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::DeleteColumn { index: 0 });
