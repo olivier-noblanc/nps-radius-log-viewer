@@ -214,12 +214,6 @@ struct BusyGuard {
 impl BusyGuard {
     fn new(is_busy: Arc<AtomicBool>) -> Self {
         is_busy.store(true, Ordering::SeqCst);
-        // Direct DLL call to set the cursor immediately
-        unsafe {
-            if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
-                SetCursor(Some(h_cursor));
-            }
-        }
         Self { is_busy }
     }
 }
@@ -396,7 +390,8 @@ impl MyWindow {
                 args.insert("count", count.to_string());
                 args.insert("raw", raw.to_string());
                 
-                let _ = me.status_bar.parts().get(1).set_text(&loader.get_args("ui-status-display", args));
+                let msg = loader.get_args("ui-status-display", args);
+                let _ = me.status_bar.parts().get(1).set_text(&clean_tr(&msg));
                 let _ = me.status_bar.parts().get(0).set_text("");
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
                 Ok(0)
@@ -463,19 +458,7 @@ impl MyWindow {
         });
 
         // --- HIGH-LEVEL SUBCLASSING FOR WAIT CURSOR ---
-        let is_busy_flag = self.is_busy.clone();
-        self.wnd.on().wm_set_cursor(move |p| {
-            if is_busy_flag.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
-                unsafe {
-                    if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
-                        SetCursor(Some(h_cursor));
-                        return Ok(true); // Handled, show wait cursor
-                    }
-                }
-            }
-            Ok(false) // Default behavior
-        });
-
+        // Only subclass the ListView to avoid interfering with window resizing (borders/frame)
         let is_busy_flag2 = self.is_busy.clone();
         self.lst_logs.on_subclass().wm_set_cursor(move |p| {
             if is_busy_flag2.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
