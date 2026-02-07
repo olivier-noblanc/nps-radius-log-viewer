@@ -11,15 +11,17 @@ keywords = ["radius", "nps", "ias", "log-viewer", "network"]
 categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 winsafe = { git = "https://github.com/rodrigocfd/winsafe", features = ["gui", "shell", "user", "gdi", "comctl", "uxtheme", "ole", "oleaut"] }
 quick-xml = { version = "0.38", features = ["serialize"] }
 rayon = "1.10"
 chrono = "0.4.40"
 rust_xlsxwriter = "0.93" # Excel Export
 anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
+notify = "6.1"
+
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
-serde_json = "1.0.149"
 clipboard-win = "5.4.1"
 i18n-embed = { version = "0.15", features = ["fluent-system", "desktop-requester"] }
 rust-embed = "8.5"

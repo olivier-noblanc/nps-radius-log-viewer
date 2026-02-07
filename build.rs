@@ -3,7 +3,9 @@ use std::io;
 #[cfg(windows)]
 fn main() -> io::Result<()> {
     let mut res = winres::WindowsResource::new();
-    res.set_icon("app.ico");
+    
+    // Set icon with explicit ID 1
+    res.set_icon_with_id("app.ico", "1");
     
     // Métadonnées (déjà présentes dans votre code)
     res.set("ProductName", "RADIUS Log Browser");
