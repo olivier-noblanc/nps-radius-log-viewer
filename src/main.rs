@@ -183,6 +183,11 @@ impl LogColumn {
         }
     }
 }
+// --- FFI for Cursor Management ---
+extern "system" {
+    fn SetCursor(hcursor: winsafe::HCURSOR) -> winsafe::HCURSOR;
+}
+
 // --- UI Application ---
 
 #[derive(Clone)]
@@ -195,8 +200,7 @@ struct MyWindow {
     btn_rejects:  gui::Button,
     cb_append:    gui::CheckBox,
     btn_copy:     gui::Button,
-    lbl_status:   gui::Label,
-    progress:     gui::ProgressBar,
+    status_bar:   gui::StatusBar,
     
     all_items:    Arc<Mutex<Vec<RadiusRequest>>>,
     raw_count:    Arc<Mutex<usize>>,
@@ -275,18 +279,10 @@ impl MyWindow {
                 height: 30,
                 ..Default::default()
             }),
-            lbl_status:   gui::Label::new(&wnd, gui::LabelOpts {
-                position: (10, config.window_height - 30),
-                size: (config.window_width - 20, 20),
-                resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
-                ..Default::default()
-            }),
-            progress:     gui::ProgressBar::new(&wnd, gui::ProgressBarOpts {
-                position: (10, config.window_height - 50),
-                size: (config.window_width - 20, 15),
-                resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
-                ..Default::default()
-            }),
+            status_bar:   gui::StatusBar::new(&wnd, &[
+                gui::SbPart::Fixed(200),
+                gui::SbPart::Proportional(1),
+            ]),
             all_items:    Arc::new(Mutex::new(Vec::new())),
             raw_count:    Arc::new(Mutex::new(0)),
             filtered_ids: Arc::new(Mutex::new(Vec::new())),
@@ -393,8 +389,8 @@ impl MyWindow {
                     .replace("{ $raw }", &raw_str)
                     .replace("{$raw}", &raw_str);
                 
-                let _ = me.lbl_status.hwnd().SetWindowText(&status_fmt);
-                let _ = me.progress.hwnd().ShowWindow(co::SW::HIDE);
+                let _ = me.status_bar.parts().get(1).set_text(&status_fmt);
+                let _ = me.status_bar.parts().get(0).set_text("");
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
                 Ok(0)
             }
@@ -404,9 +400,8 @@ impl MyWindow {
             let me = self.clone();
             move |_| {
                 *me.is_busy.lock().expect("Lock failed") = false;
-                let _ = me.progress.hwnd().ShowWindow(co::SW::HIDE);
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-                let _ = me.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-error"));
+                let _ = me.status_bar.parts().get(1).set_text(&loader.get("ui-status-error"));
                 Ok(0)
             }
         });
@@ -414,8 +409,23 @@ impl MyWindow {
         self.wnd.on().wm(WM_PROGRESS_UPDATE, {
             let me = self.clone();
             move |p| {
-                me.progress.set_position(p.wparam as _);
+                let percent = p.wparam as usize;
+                let text = format!("{percent}%");
+                let _ = me.status_bar.parts().get(0).set_text(&text);
                 Ok(0)
+            }
+        });
+
+        self.wnd.on().wm_set_cursor({
+            let me = self.clone();
+            move |_| {
+                if *me.is_busy.lock().expect("Lock failed") {
+                    if let Ok(h_wait) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
+                        unsafe { SetCursor(h_wait.raw_copy()); }
+                        return Ok(true); // Handled
+                    }
+                }
+                Ok(false) // Default behavior
             }
         });
 
@@ -501,7 +511,7 @@ impl MyWindow {
             }
             
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-            let _ = self.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-loading"));
+            let _ = self.status_bar.parts().get(1).set_text(&loader.get("ui-status-loading"));
             
             let query = self.txt_search.text().unwrap_or_default();
             let show_err_val = *self.show_errors.lock().expect("Lock failed");
@@ -517,7 +527,17 @@ impl MyWindow {
 
             thread::spawn(move || {
                 let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
-                match parse_full_logic(&path) {
+                let prog_cb = |p: usize| {
+                    unsafe {
+                        let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                            msg_id: WM_PROGRESS_UPDATE,
+                            wparam: p,
+                            lparam: 0,
+                        });
+                    }
+                };
+                
+                match parse_full_logic(&path, prog_cb) {
                     Ok((items, raw_total)) => {
                         let mut all_guard = all_items_bg.lock().expect("Lock failed");
                         if is_append {
@@ -588,7 +608,7 @@ impl MyWindow {
             }
             
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-            let _ = self.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-loading-folder"));
+            let _ = self.status_bar.parts().get(1).set_text(&loader.get("ui-status-loading-folder"));
             
             let query = self.txt_search.text().unwrap_or_default();
             let show_err_val = *self.show_errors.lock().expect("Lock failed");
@@ -620,16 +640,31 @@ impl MyWindow {
                 
                 files.sort_by_key(|f| f.1); 
                 
+                let num_files = files.len();
                 let mut total_items = Vec::new();
                 let mut total_raw = 0;
 
+                let mut files_processed = 0;
                 for (path, _) in files.into_iter() {
-                    if let Ok((items, raw)) = parse_full_logic(&path.to_string_lossy()) {
+                    let path_str = path.to_string_lossy();
+                    let file_prog_cb = |p: usize| {
+                        if num_files > 0 {
+                            let overall_p = (files_processed * 100 + p) / num_files;
+                            unsafe {
+                                let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                                    msg_id: WM_PROGRESS_UPDATE,
+                                    wparam: overall_p,
+                                    lparam: 0,
+                                });
+                            }
+                        }
+                    };
+
+                    if let Ok((items, raw)) = parse_full_logic(&path_str, file_prog_cb) {
                         total_items.extend(items);
                         total_raw += raw;
                     }
-                    
-                    // Progress update removed as requested
+                    files_processed += 1;
                 }
 
                 let mut all_guard = all_items_bg.lock().expect("Lock failed");
@@ -1085,9 +1120,40 @@ fn apply_filter_logic(
     *filt_guard = ids;
 }
 
-fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
+fn process_event_to_request(e: Event) -> RadiusRequest {
+    let mut req = RadiusRequest {
+        timestamp: e.timestamp.unwrap_or_default(),
+        req_type: e.packet_type.as_deref().map(map_packet_type).unwrap_or_default(),
+        server: e.server.unwrap_or_default(),
+        ap_ip: e.ap_ip.unwrap_or_default(),
+        ap_name: e.client_friendly_name.or(e.ap_name).unwrap_or_default(),
+        mac: e.mac.unwrap_or_default(),
+        user: e.sam_account.or(e.user_name).unwrap_or_default(),
+        reason: e.reason_code.as_deref().map(map_reason).unwrap_or_default(),
+        class_id: e.class.unwrap_or_default(),
+        session_id: e.acct_session_id.unwrap_or_default(),
+        ..Default::default()
+    };
+    
+    // Assign colors based on packet type
+    if let Some(p_type) = e.packet_type.as_deref() {
+        match p_type {
+            "2" => req.bg_color = Some((204, 255, 204)), // Green
+            "3" => req.bg_color = Some((255, 204, 204)), // Red
+            _ => {},
+        }
+        req.resp_type = map_packet_type(p_type);
+    }
+    
+    req
+}
+
+fn parse_full_logic<F>(path: &str, progress_callback: F) -> anyhow::Result<(Vec<RadiusRequest>, usize)> 
+where F: Fn(usize) {
+    progress_callback(10);
     let content = fs::read_to_string(path)?;
-    // Wrap to make it a valid XML if it's just a list of fragments
+    progress_callback(40);
+    
     let wrapped = if content.trim().starts_with("<events>") {
         content
     } else {
@@ -1095,17 +1161,19 @@ fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
     };
 
     let root: Root = from_str(&wrapped)?;
+    progress_callback(70); // Deserialization done
+    
     let events = root.events;
     let raw_event_count = events.len();
     
     if events.is_empty() {
+        progress_callback(100);
         return Ok((Vec::new(), 0));
     }
 
-    // Grouping events by Class or Session ID
-    // If both are missing, we don't group (each event stays individual)
+    // Grouping events logic
     let mut groups: Vec<Vec<Event>> = Vec::new();
-    let mut class_map: HashMap<String, usize> = HashMap::new(); // maps class/session_id to index in groups
+    let mut class_map: HashMap<String, usize> = HashMap::new();
 
     for ev in events {
         let key = ev.class.as_deref()
@@ -1120,16 +1188,17 @@ fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
                 groups.push(vec![ev]);
             }
         } else {
-            // No grouping key, add as standalone
             groups.push(vec![ev]);
         }
     }
 
-    let mut requests: Vec<RadiusRequest> = groups.into_par_iter()
+    progress_callback(90); // Grouping done
+
+    let requests: Vec<RadiusRequest> = groups.into_par_iter()
         .map(|g| process_group(&g))
         .collect();
         
-    requests.par_sort_unstable_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    progress_callback(100); // Final processing done
     Ok((requests, raw_event_count))
 }
 
