@@ -230,7 +230,7 @@ impl MyWindow {
             wnd: wnd.clone(),
             lst_logs:     gui::ListView::new(&wnd, gui::ListViewOpts {
                 position: (10, 50),
-                size: (config.window_width - 20, config.window_height - 120),
+                size: (config.window_width - 20, config.window_height - 90),
                 control_style: co::LVS::REPORT | co::LVS::NOSORTHEADER | co::LVS::SHOWSELALWAYS | co::LVS::OWNERDATA,
                 resize_behavior: (gui::Horz::Resize, gui::Vert::Resize),
                 ..Default::default()
@@ -276,16 +276,14 @@ impl MyWindow {
                 ..Default::default()
             }),
             lbl_status:   gui::Label::new(&wnd, gui::LabelOpts {
-                position: (10, config.window_height - 85),
+                position: (10, config.window_height - 30),
                 size: (config.window_width - 20, 20),
                 resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
                 ..Default::default()
             }),
             progress:     gui::ProgressBar::new(&wnd, gui::ProgressBarOpts {
-                position: (10, config.window_height - 60),
-                size: (config.window_width - 20, 20),
-                window_style: co::WS::CHILD | co::WS::VISIBLE | co::WS::BORDER,
-                control_style: co::PBS::MARQUEE,
+                position: (10, config.window_height - 50),
+                size: (config.window_width - 20, 15),
                 resize_behavior: (gui::Horz::Resize, gui::Vert::Repos),
                 ..Default::default()
             }),
@@ -370,9 +368,6 @@ impl MyWindow {
                     }
                 }
                 
-                // Initial state: hide progress
-                me.progress.hwnd().ShowWindow(co::SW::HIDE);
-                
                 // Initializing columns dynamically
                 me.refresh_columns();
 
@@ -384,8 +379,6 @@ impl MyWindow {
             let me = self.clone();
             move |_| {
                 *me.is_busy.lock().expect("Lock failed") = false;
-                me.progress.set_marquee(false);
-                me.progress.hwnd().ShowWindow(co::SW::HIDE);
                 
                 let count = me.filtered_ids.lock().expect("Lock failed").len();
                 let raw_str = me.raw_count.lock().expect("Lock failed").to_string();
@@ -401,16 +394,8 @@ impl MyWindow {
                     .replace("{$raw}", &raw_str);
                 
                 let _ = me.lbl_status.hwnd().SetWindowText(&status_fmt);
+                let _ = me.progress.hwnd().ShowWindow(co::SW::HIDE);
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
-                Ok(0)
-            }
-        });
-
-        self.wnd.on().wm(WM_PROGRESS_UPDATE, {
-            let me = self.clone();
-            move |p| {
-                let percent = p.wparam as u32;
-                me.progress.set_position(percent);
                 Ok(0)
             }
         });
@@ -419,10 +404,17 @@ impl MyWindow {
             let me = self.clone();
             move |_| {
                 *me.is_busy.lock().expect("Lock failed") = false;
-                me.progress.set_marquee(false);
-                me.progress.hwnd().ShowWindow(co::SW::HIDE);
+                let _ = me.progress.hwnd().ShowWindow(co::SW::HIDE);
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let _ = me.lbl_status.hwnd().SetWindowText(&loader.get("ui-status-error"));
+                Ok(0)
+            }
+        });
+
+        self.wnd.on().wm(WM_PROGRESS_UPDATE, {
+            let me = self.clone();
+            move |p| {
+                me.progress.set_position(p.wparam as _);
                 Ok(0)
             }
         });
@@ -501,9 +493,6 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            self.progress.set_position(0);
-            let _ = self.progress.hwnd().ShowWindow(co::SW::SHOW);
-            self.progress.set_marquee(true);
             *self.is_busy.lock().expect("Lock failed") = true;
             
             // Proactive safety: Clear list view count before background update starts (if not appending)
@@ -591,9 +580,6 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            self.progress.set_position(0);
-            let _ = self.progress.hwnd().ShowWindow(co::SW::SHOW);
-            self.progress.set_marquee(false); 
             *self.is_busy.lock().expect("Lock failed") = true;
 
             // Proactive safety: Clear list view count before background update starts (if not appending)
@@ -633,27 +619,17 @@ impl MyWindow {
                 }
                 
                 files.sort_by_key(|f| f.1); 
-
-                let num_files = files.len() as f32;
+                
                 let mut total_items = Vec::new();
                 let mut total_raw = 0;
-                
-                for (i, (path, _)) in files.into_iter().enumerate() {
+
+                for (path, _) in files.into_iter() {
                     if let Ok((items, raw)) = parse_full_logic(&path.to_string_lossy()) {
                         total_items.extend(items);
                         total_raw += raw;
                     }
                     
-                    if num_files > 0.0 {
-                        let percent = ((i as f32 + 1.0) / num_files * 100.0) as usize;
-                        unsafe {
-                            let _ = hwnd_bg.PostMessage(msg::WndMsg {
-                                msg_id: WM_PROGRESS_UPDATE,
-                                wparam: percent,
-                                lparam: 0,
-                            });
-                        }
-                    }
+                    // Progress update removed as requested
                 }
 
                 let mut all_guard = all_items_bg.lock().expect("Lock failed");
@@ -958,34 +934,25 @@ impl MyWindow {
                 if let Some(clr) = color {
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
                     
-                    // RDP optimization: Set background color and text color explicitly
-                    // This helps when FillRect is optimized away
+                    // Force GDI background fill (Hyper-V/RDP safety)
+                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
+                    }
+
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
-                        // Use contrast colors for text
-                        let text_color = if clr.1 > 200 { 
-                            winsafe::COLORREF::from_rgb(0, 128, 0) // Dark Green for Green bg
-                        } else if clr.0 > 200 {
-                            winsafe::COLORREF::from_rgb(128, 0, 0) // Dark Red for Red bg
-                        } else {
+                        // Use Black/White for better contrast
+                        let text_color = if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
                             winsafe::COLORREF::from_rgb(0, 0, 0)
+                        } else {
+                            winsafe::COLORREF::from_rgb(255, 255, 255)
                         };
                         (*p_ptr).clrText = text_color;
                         
                         let _ = p.mcd.hdc.SetBkColor(color_ref);
                         let _ = p.mcd.hdc.SetTextColor(text_color);
-                        
-                        // Select bold font if available
-                        if let Some(hfont) = self.bold_font.lock().expect("Lock failed").as_ref() {
-                            let _ = p.mcd.hdc.SelectObject(&**hfont);
-                        }
                     }
-                    
-                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
-                    }
-                    
                     unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
                 } else {
                     co::CDRF::NOTIFYSUBITEMDRAW
@@ -1003,25 +970,15 @@ impl MyWindow {
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
-                        let text_color = if clr.1 > 200 { 
-                            winsafe::COLORREF::from_rgb(0, 128, 0)
-                        } else if clr.0 > 200 {
-                            winsafe::COLORREF::from_rgb(128, 0, 0)
-                        } else {
+                        let text_color = if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
                             winsafe::COLORREF::from_rgb(0, 0, 0)
+                        } else {
+                            winsafe::COLORREF::from_rgb(255, 255, 255)
                         };
                         (*p_ptr).clrText = text_color;
                         
                         let _ = p.mcd.hdc.SetBkColor(color_ref);
                         let _ = p.mcd.hdc.SetTextColor(text_color);
-
-                        if let Some(hfont) = self.bold_font.lock().expect("Lock failed").as_ref() {
-                            let _ = p.mcd.hdc.SelectObject(&**hfont);
-                        }
-                    }
-                    
-                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
                     }
                     co::CDRF::NEWFONT 
                 } else {
