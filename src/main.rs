@@ -1066,19 +1066,29 @@ fn apply_filter_logic(
 fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
     let content = fs::read_to_string(path)?;
     
-    // Massively parallel deserialization using Rayon
-    let segments: Vec<&str> = content.split("<Event").skip(1).collect();
-    let events_all: Vec<Event> = segments.into_par_iter()
-        .filter_map(|part| {
-            if let Some(end_pos) = part.find("</Event>") {
-                let mut full_event = String::with_capacity(part.len() + 7);
-                full_event.push_str("<Event");
-                full_event.push_str(&part[..end_pos + 8]);
-                from_str::<Event>(&full_event).ok()
-            } else {
-                None
+    use quick_xml::reader::Reader;
+    use quick_xml::events::Event as XmlEvent;
+
+    let mut reader = Reader::from_str(&content);
+    let mut buf = Vec::new();
+    let mut event_blobs = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(ref e)) if e.name().as_ref() == b"Event" => {
+                let start_pos = reader.buffer_position() - (e.name().as_ref().len() as u64) - 2;
+                reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                let end_pos = reader.buffer_position();
+                event_blobs.push(content[start_pos as usize..end_pos as usize].to_string());
             }
-        })
+            Ok(XmlEvent::Eof) => break,
+            _ => (),
+        }
+        buf.clear();
+    }
+
+    let events_all: Vec<Event> = event_blobs.into_par_iter()
+        .filter_map(|blob| from_str::<Event>(&blob).ok())
         .collect();
 
     let raw_event_count = events_all.len();
