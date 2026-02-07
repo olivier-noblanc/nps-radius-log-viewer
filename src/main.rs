@@ -956,44 +956,7 @@ impl MyWindow {
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
-            co::CDDS::ITEMPREPAINT => {
-                let color = {
-                    let items = self.all_items.lock().expect("Lock failed");
-                    let ids = self.filtered_ids.lock().expect("Lock failed");
-                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
-                };
-
-                if let Some(clr) = color {
-                    let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                    
-                    // Fill background manually to bypass theme painting
-                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
-                    }
-
-                    // Apply Bold Font
-                    if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
-                        let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
-                    }
-
-                    let p_ptr = std::ptr::from_ref(p).cast_mut();
-                    unsafe {
-                        (*p_ptr).clrTextBk = color_ref;
-                        let text_color = if clr == (220, 255, 220) {
-                            winsafe::COLORREF::from_rgb(0, 64, 0)
-                        } else if clr == (255, 220, 220) {
-                            winsafe::COLORREF::from_rgb(102, 0, 0)
-                        } else {
-                            winsafe::COLORREF::from_rgb(0, 0, 0)
-                        };
-                        (*p_ptr).clrText = text_color;
-                        let _ = p.mcd.hdc.SetTextColor(text_color);
-                    }
-                    unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
-                } else {
-                    co::CDRF::NOTIFYSUBITEMDRAW
-                }
-            },
+            co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
             _ if p.mcd.dwDrawStage.raw() == (co::CDDS::ITEMPREPAINT.raw() | co::CDDS::SUBITEM.raw()) => {
                 let color = {
                     let items = self.all_items.lock().expect("Lock failed");
@@ -1003,24 +966,23 @@ impl MyWindow {
 
                 if let Some(clr) = color {
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                    
-                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
-                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
-                    }
+                    let text_color = if clr == (220, 255, 220) {
+                        winsafe::COLORREF::from_rgb(0, 64, 0)
+                    } else if clr == (255, 220, 220) {
+                        winsafe::COLORREF::from_rgb(102, 0, 0)
+                    } else {
+                        winsafe::COLORREF::from_rgb(0, 0, 0)
+                    };
 
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
-                        let text_color = if clr == (220, 255, 220) {
-                            winsafe::COLORREF::from_rgb(0, 64, 0)
-                        } else if clr == (255, 220, 220) {
-                            winsafe::COLORREF::from_rgb(102, 0, 0)
-                        } else {
-                            winsafe::COLORREF::from_rgb(0, 0, 0)
-                        };
                         (*p_ptr).clrText = text_color;
-                        let _ = p.mcd.hdc.SetBkColor(color_ref);
-                        let _ = p.mcd.hdc.SetTextColor(text_color);
+                        
+                        // Select Bold Font
+                        if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                            let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                        }
                     }
                     co::CDRF::NEWFONT
                 } else {
@@ -1037,12 +999,7 @@ impl MyWindow {
 
     fn refresh_columns(&self) {
         // Disable Explorer theme (switch to Classic mode) on the ListView itself to ensure background colors work correctly
-        let _ = self.lst_logs.hwnd().SetWindowTheme("", None);
-
-        // Tell the ListView not to paint its own background (use transparency/custom draw)
-        unsafe {
-            let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::SetBkColor { color: Some(winsafe::COLORREF::from_raw(0xFFFF_FFFF)) });
-        }
+        let _ = self.lst_logs.hwnd().SetWindowTheme(" ", None);
 
         // Force Explorer theme on the Header so sort arrows remain visible
         let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
