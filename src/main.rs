@@ -406,28 +406,6 @@ impl MyWindow {
             }
         });
 
-        self.wnd.on().wm(WM_PROGRESS_UPDATE, {
-            let me = self.clone();
-            move |p| {
-                let percent = p.wparam;
-                let text = format!("{percent}%");
-                let _ = me.status_bar.parts().get(0).set_text(&text);
-                Ok(0)
-            }
-        });
-
-        self.wnd.on().wm_set_cursor({
-            let me = self.clone();
-            move |p| {
-                if *me.is_busy.lock().expect("Lock failed") && p.hit_test == co::HT::CLIENT {
-                    if let Ok(h_wait) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-                        unsafe { SetCursor(h_wait.raw_copy()); }
-                        return Ok(true); // Handled
-                    }
-                }
-                Ok(false) // Default behavior
-            }
-        });
 
     }
 
@@ -527,17 +505,7 @@ impl MyWindow {
 
             thread::spawn(move || {
                 let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
-                let prog_cb = |p: usize| {
-                    unsafe {
-                        let _ = hwnd_bg.PostMessage(msg::WndMsg {
-                            msg_id: WM_PROGRESS_UPDATE,
-                            wparam: p,
-                            lparam: 0,
-                        });
-                    }
-                };
-                
-                match parse_full_logic(&path, prog_cb) {
+                match parse_full_logic(&path) {
                     Ok((items, raw_total)) => {
                         let mut all_guard = all_items_bg.lock().expect("Lock failed");
                         if is_append {
@@ -640,26 +608,12 @@ impl MyWindow {
                 
                 files.sort_by_key(|f| f.1); 
                 
-                let num_files = files.len();
                 let mut total_items = Vec::new();
                 let mut total_raw = 0;
 
-                for (files_processed, (path, _)) in files.into_iter().enumerate() {
+                for (path, _) in files.into_iter() {
                     let path_str = path.to_string_lossy();
-                    let file_prog_cb = |p: usize| {
-                        if num_files > 0 {
-                            let overall_p = (files_processed * 100 + p) / num_files;
-                            unsafe {
-                                let _ = hwnd_bg.PostMessage(msg::WndMsg {
-                                    msg_id: WM_PROGRESS_UPDATE,
-                                    wparam: overall_p,
-                                    lparam: 0,
-                                });
-                            }
-                        }
-                    };
-
-                    if let Ok((items, raw)) = parse_full_logic(&path_str, file_prog_cb) {
+                    if let Ok((items, raw)) = parse_full_logic(&path_str) {
                         total_items.extend(items);
                         total_raw += raw;
                     }
@@ -1119,42 +1073,7 @@ fn apply_filter_logic(
 }
 
 
-fn parse_full_logic<F>(path: &str, progress_callback: F) -> anyhow::Result<(Vec<RadiusRequest>, usize)> 
-where F: Fn(usize) {
-    use quick_xml::reader::Reader;
-    use quick_xml::events::Event as XmlEvent;
-
-    let file = fs::File::open(path)?;
-    let mut reader = Reader::from_reader(std::io::BufReader::new(file));
-    let mut buf = Vec::new();
-    
-    let file_size = fs::metadata(path)?.len() as f64;
-    let mut last_percent = 0;
-
-    progress_callback(5);
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(XmlEvent::Start(ref e)) if e.name().as_ref() == b"Event" => {
-                // Just consume the event and track progress
-                reader.read_to_end_into(e.name(), &mut Vec::new())?;
-            }
-            Ok(XmlEvent::Eof) => break,
-            _ => (),
-        }
-        
-        let pos = reader.buffer_position() as f64;
-        let percent = (pos / file_size * 50.0) as usize; // First 50% for reading/locating tags
-        if percent > last_percent {
-            progress_callback(percent);
-            last_percent = percent;
-        }
-        buf.clear();
-    }
-
-    // Since we realize quick-xml + serde-xml-rs is tricky for partial stream of List<Event>,
-    // we'll do the deserialization in a way that doesn't block the progress updates.
-    
+fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
     let content = fs::read_to_string(path)?;
     let wrapped = if content.trim().starts_with("<events>") {
         content
@@ -1162,24 +1081,19 @@ where F: Fn(usize) {
         format!("<events>{content}</events>")
     };
 
-    progress_callback(60);
     let root: Root = from_str(&wrapped)?;
     let events_all = root.events;
     let raw_event_count = events_all.len();
     
     if events_all.is_empty() {
-        progress_callback(100);
         return Ok((Vec::new(), 0));
     }
-
-    progress_callback(70);
 
     // Grouping events logic
     let mut groups: Vec<Vec<Event>> = Vec::new();
     let mut class_map: HashMap<String, usize> = HashMap::new();
 
-    let total_ev = events_all.len();
-    for (i, ev) in events_all.into_iter().enumerate() {
+    for ev in events_all {
         let key = ev.class.as_deref()
             .or(ev.acct_session_id.as_deref())
             .filter(|&s| !s.is_empty());
@@ -1194,20 +1108,12 @@ where F: Fn(usize) {
         } else {
             groups.push(vec![ev]);
         }
-        
-        if i % 1000 == 0 {
-            let p = 70 + (i as f64 / total_ev as f64 * 20.0) as usize;
-            progress_callback(p);
-        }
     }
-
-    progress_callback(90);
 
     let requests: Vec<RadiusRequest> = groups.into_par_iter()
         .map(|g| process_group(&g))
         .collect();
         
-    progress_callback(100);
     Ok((requests, raw_event_count))
 }
 
