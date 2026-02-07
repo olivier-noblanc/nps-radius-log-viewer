@@ -375,32 +375,6 @@ impl MyWindow {
                         *me.bold_font.lock().expect("Lock failed") = Some(hfont_bold);
                     }
 
-                    // --- HIGH-LEVEL SUBCLASSING FOR WAIT CURSOR ---
-                    let is_busy_flag = me.is_busy.clone();
-                    me.wnd.on().wm_set_cursor(move |p| {
-                        if is_busy_flag.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
-                            unsafe {
-                                if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
-                                    SetCursor(Some(h_cursor));
-                                    return Ok(true); // Handled, show wait cursor
-                                }
-                            }
-                        }
-                        Ok(false) // Default behavior
-                    });
-
-                    let is_busy_flag2 = me.is_busy.clone();
-                    me.lst_logs.on_subclass().wm_set_cursor(move |p| {
-                        if is_busy_flag2.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
-                            unsafe {
-                                if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
-                                    SetCursor(Some(h_cursor));
-                                    return Ok(true);
-                                }
-                            }
-                        }
-                        Ok(false)
-                    });
                 }
                 
                 // Initializing columns dynamically
@@ -486,6 +460,33 @@ impl MyWindow {
         self.lst_logs.on().nm_custom_draw({
             let me = self.clone();
             move |p| Ok(me.on_lst_nm_custom_draw(p))
+        });
+
+        // --- HIGH-LEVEL SUBCLASSING FOR WAIT CURSOR ---
+        let is_busy_flag = self.is_busy.clone();
+        self.wnd.on().wm_set_cursor(move |p| {
+            if is_busy_flag.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
+                unsafe {
+                    if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
+                        SetCursor(Some(h_cursor));
+                        return Ok(true); // Handled, show wait cursor
+                    }
+                }
+            }
+            Ok(false) // Default behavior
+        });
+
+        let is_busy_flag2 = self.is_busy.clone();
+        self.lst_logs.on_subclass().wm_set_cursor(move |p| {
+            if is_busy_flag2.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
+                unsafe {
+                    if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
+                        SetCursor(Some(h_cursor));
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
         });
     }
 
