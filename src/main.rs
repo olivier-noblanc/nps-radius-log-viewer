@@ -27,7 +27,6 @@ static LANGUAGE_LOADER: OnceLock<FluentLanguageLoader> = OnceLock::new();
 
 const WM_LOAD_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 1) };
 const WM_LOAD_ERROR: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 2) };
-const WM_PROGRESS_UPDATE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 3) };
 
 // --- XML Structures ---
 #[derive(Debug, Deserialize, Clone)]
@@ -59,11 +58,6 @@ struct Event {
     reason_code: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct Root {
-    #[serde(rename = "Event", default)]
-    events: Vec<Event>,
-}
 
 #[derive(Clone, Debug, Default)]
 struct RadiusRequest {
@@ -1075,16 +1069,23 @@ fn apply_filter_logic(
 
 fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
     let content = fs::read_to_string(path)?;
-    let wrapped = if content.trim().starts_with("<events>") {
-        content
-    } else {
-        format!("<events>{content}</events>")
-    };
-
-    let root: Root = from_str(&wrapped)?;
-    let events_all = root.events;
-    let raw_event_count = events_all.len();
     
+    // Massively parallel deserialization using Rayon
+    let segments: Vec<&str> = content.split("<Event").skip(1).collect();
+    let events_all: Vec<Event> = segments.into_par_iter()
+        .filter_map(|part| {
+            if let Some(end_pos) = part.find("</Event>") {
+                let mut full_event = String::with_capacity(part.len() + 7);
+                full_event.push_str("<Event");
+                full_event.push_str(&part[..end_pos + 8]);
+                from_str::<Event>(&full_event).ok()
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let raw_event_count = events_all.len();
     if events_all.is_empty() {
         return Ok((Vec::new(), 0));
     }
@@ -1094,11 +1095,11 @@ fn parse_full_logic(path: &str) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
     let mut class_map: HashMap<String, usize> = HashMap::new();
 
     for ev in events_all {
-        let key = ev.class.as_deref()
+        let key_opt = ev.class.as_deref()
             .or(ev.acct_session_id.as_deref())
-            .filter(|&s| !s.is_empty());
+            .filter(|s: &&str| !s.is_empty());
         
-        if let Some(k) = key {
+        if let Some(k) = key_opt {
             if let Some(&idx) = class_map.get(k) {
                 groups[idx].push(ev);
             } else {
