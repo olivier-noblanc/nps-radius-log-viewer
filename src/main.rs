@@ -370,7 +370,7 @@ impl MyWindow {
                         style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
                     // Disable Explorer theme (switch to Classic mode) to ensure background colors work over RDP
-                    // let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
+                    let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
 
                     // Create Bold Font
                     let hfont = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}).unwrap_or_else(|| {
@@ -994,10 +994,10 @@ impl MyWindow {
                         };
                         (*p_ptr).clrText = text_color;
                         
-                        let _ = p.mcd.hdc.SetBkColor(color_ref);
                         let _ = p.mcd.hdc.SetTextColor(text_color);
                     }
-                    unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
+                    // Return SKIPDEFAULT to prevent Windows from erasing our manual background fill
+                    unsafe { co::CDRF::from_raw(co::CDRF::SKIPDEFAULT.raw() | co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
                 } else {
                     co::CDRF::NOTIFYSUBITEMDRAW
                 }
