@@ -409,7 +409,7 @@ impl MyWindow {
         self.wnd.on().wm(WM_PROGRESS_UPDATE, {
             let me = self.clone();
             move |p| {
-                let percent = p.wparam as usize;
+                let percent = p.wparam;
                 let text = format!("{percent}%");
                 let _ = me.status_bar.parts().get(0).set_text(&text);
                 Ok(0)
@@ -418,8 +418,8 @@ impl MyWindow {
 
         self.wnd.on().wm_set_cursor({
             let me = self.clone();
-            move |_| {
-                if *me.is_busy.lock().expect("Lock failed") {
+            move |p| {
+                if *me.is_busy.lock().expect("Lock failed") && p.hit_test == co::HT::CLIENT {
                     if let Ok(h_wait) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
                         unsafe { SetCursor(h_wait.raw_copy()); }
                         return Ok(true); // Handled
@@ -624,7 +624,7 @@ impl MyWindow {
             thread::spawn(move || {
                 let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                 
-                let mut files = Vec::new();
+                let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
                 if let Ok(entries) = fs::read_dir(&folder_path) {
                     for entry in entries.flatten() {
                         let path = entry.path();
@@ -644,8 +644,7 @@ impl MyWindow {
                 let mut total_items = Vec::new();
                 let mut total_raw = 0;
 
-                let mut files_processed = 0;
-                for (path, _) in files.into_iter() {
+                for (files_processed, (path, _)) in files.into_iter().enumerate() {
                     let path_str = path.to_string_lossy();
                     let file_prog_cb = |p: usize| {
                         if num_files > 0 {
@@ -664,7 +663,6 @@ impl MyWindow {
                         total_items.extend(items);
                         total_raw += raw;
                     }
-                    files_processed += 1;
                 }
 
                 let mut all_guard = all_items_bg.lock().expect("Lock failed");
@@ -1120,62 +1118,68 @@ fn apply_filter_logic(
     *filt_guard = ids;
 }
 
-fn process_event_to_request(e: Event) -> RadiusRequest {
-    let mut req = RadiusRequest {
-        timestamp: e.timestamp.unwrap_or_default(),
-        req_type: e.packet_type.as_deref().map(map_packet_type).unwrap_or_default(),
-        server: e.server.unwrap_or_default(),
-        ap_ip: e.ap_ip.unwrap_or_default(),
-        ap_name: e.client_friendly_name.or(e.ap_name).unwrap_or_default(),
-        mac: e.mac.unwrap_or_default(),
-        user: e.sam_account.or(e.user_name).unwrap_or_default(),
-        reason: e.reason_code.as_deref().map(map_reason).unwrap_or_default(),
-        class_id: e.class.unwrap_or_default(),
-        session_id: e.acct_session_id.unwrap_or_default(),
-        ..Default::default()
-    };
-    
-    // Assign colors based on packet type
-    if let Some(p_type) = e.packet_type.as_deref() {
-        match p_type {
-            "2" => req.bg_color = Some((204, 255, 204)), // Green
-            "3" => req.bg_color = Some((255, 204, 204)), // Red
-            _ => {},
-        }
-        req.resp_type = map_packet_type(p_type);
-    }
-    
-    req
-}
 
 fn parse_full_logic<F>(path: &str, progress_callback: F) -> anyhow::Result<(Vec<RadiusRequest>, usize)> 
 where F: Fn(usize) {
-    progress_callback(10);
-    let content = fs::read_to_string(path)?;
-    progress_callback(40);
+    use quick_xml::reader::Reader;
+    use quick_xml::events::Event as XmlEvent;
+
+    let file = fs::File::open(path)?;
+    let mut reader = Reader::from_reader(std::io::BufReader::new(file));
+    let mut buf = Vec::new();
     
+    let file_size = fs::metadata(path)?.len() as f64;
+    let mut last_percent = 0;
+
+    progress_callback(5);
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(ref e)) if e.name().as_ref() == b"Event" => {
+                // Just consume the event and track progress
+                reader.read_to_end_into(e.name(), &mut Vec::new())?;
+            }
+            Ok(XmlEvent::Eof) => break,
+            _ => (),
+        }
+        
+        let pos = reader.buffer_position() as f64;
+        let percent = (pos / file_size * 50.0) as usize; // First 50% for reading/locating tags
+        if percent > last_percent {
+            progress_callback(percent);
+            last_percent = percent;
+        }
+        buf.clear();
+    }
+
+    // Since we realize quick-xml + serde-xml-rs is tricky for partial stream of List<Event>,
+    // we'll do the deserialization in a way that doesn't block the progress updates.
+    
+    let content = fs::read_to_string(path)?;
     let wrapped = if content.trim().starts_with("<events>") {
         content
     } else {
         format!("<events>{content}</events>")
     };
 
+    progress_callback(60);
     let root: Root = from_str(&wrapped)?;
-    progress_callback(70); // Deserialization done
+    let events_all = root.events;
+    let raw_event_count = events_all.len();
     
-    let events = root.events;
-    let raw_event_count = events.len();
-    
-    if events.is_empty() {
+    if events_all.is_empty() {
         progress_callback(100);
         return Ok((Vec::new(), 0));
     }
+
+    progress_callback(70);
 
     // Grouping events logic
     let mut groups: Vec<Vec<Event>> = Vec::new();
     let mut class_map: HashMap<String, usize> = HashMap::new();
 
-    for ev in events {
+    let total_ev = events_all.len();
+    for (i, ev) in events_all.into_iter().enumerate() {
         let key = ev.class.as_deref()
             .or(ev.acct_session_id.as_deref())
             .filter(|&s| !s.is_empty());
@@ -1190,15 +1194,20 @@ where F: Fn(usize) {
         } else {
             groups.push(vec![ev]);
         }
+        
+        if i % 1000 == 0 {
+            let p = 70 + (i as f64 / total_ev as f64 * 20.0) as usize;
+            progress_callback(p);
+        }
     }
 
-    progress_callback(90); // Grouping done
+    progress_callback(90);
 
     let requests: Vec<RadiusRequest> = groups.into_par_iter()
         .map(|g| process_group(&g))
         .collect();
         
-    progress_callback(100); // Final processing done
+    progress_callback(100);
     Ok((requests, raw_event_count))
 }
 
