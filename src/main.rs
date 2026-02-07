@@ -1009,6 +1009,11 @@ impl MyWindow {
                 if let Some(clr) = color {
                     let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
                     
+                    // Force GDI background fill (Hyper-V/RDP safety and CC6.0 stability)
+                    if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                        let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
+                    }
+
                     // Select Bold Font for subitems too
                     if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
                         let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
@@ -1047,7 +1052,13 @@ impl MyWindow {
 
     fn refresh_columns(&self) {
         // Disable Explorer theme (switch to Classic mode) on the ListView itself to ensure background colors work correctly
-        let _ = self.lst_logs.hwnd().SetWindowTheme("", None);
+        let _ = self.lst_logs.hwnd().SetWindowTheme(" ", None);
+
+        // Tell the ListView not to paint its own background (use transparency/custom draw)
+        unsafe {
+            let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::SetBkColor { color: Some(winsafe::COLORREF::from_raw(0xFFFF_FFFF)) });
+        }
+
         // Force Explorer theme on the Header so sort arrows remain visible
         let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
         if h_header != winsafe::HWND::NULL {
