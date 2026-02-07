@@ -989,20 +989,13 @@ impl MyWindow {
                 };
 
                 if let Some(clr) = color {
-                    let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
-                    
-                    let (bg, fg) = if is_selected {
-                        (winsafe::GetSysColor(co::COLOR::HIGHLIGHT), winsafe::GetSysColor(co::COLOR::HIGHLIGHTTEXT))
+                    let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                    let fg = if clr == (220, 255, 220) {
+                        winsafe::COLORREF::from_rgb(0, 64, 0)
+                    } else if clr == (255, 220, 220) {
+                        winsafe::COLORREF::from_rgb(102, 0, 0)
                     } else {
-                        let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        let fg = if clr == (220, 255, 220) {
-                            winsafe::COLORREF::from_rgb(0, 64, 0)
-                        } else if clr == (255, 220, 220) {
-                            winsafe::COLORREF::from_rgb(102, 0, 0)
-                        } else {
-                            winsafe::COLORREF::from_rgb(0, 0, 0)
-                        };
-                        (bg, fg)
+                        winsafe::COLORREF::from_rgb(0, 0, 0)
                     };
 
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
