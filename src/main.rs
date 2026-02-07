@@ -177,10 +177,6 @@ impl LogColumn {
         }
     }
 }
-// --- FFI for Cursor Management ---
-extern "system" {
-    fn SetCursor(hcursor: winsafe::HCURSOR) -> winsafe::HCURSOR;
-}
 
 // --- UI Application ---
 
