@@ -8,9 +8,12 @@ use quick_xml::de::from_str;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
 use std::collections::{HashMap, HashSet};
 use std::thread;
+
+use windows::Win32::UI::WindowsAndMessaging::{SetCursor, LoadCursorW, IDC_WAIT};
 
 // --- Internationalization ---
 use i18n_embed::{
@@ -199,8 +202,33 @@ struct MyWindow {
     sort_desc:    Arc<Mutex<bool>>,
     visible_cols: Arc<Mutex<Vec<LogColumn>>>,
     config:       Arc<Mutex<AppConfig>>,
-    is_busy:      Arc<Mutex<bool>>,
+    is_busy:      Arc<AtomicBool>,
     bold_font:    Arc<Mutex<Option<winsafe::guard::DeleteObjectGuard<winsafe::HFONT>>>>,
+}
+
+// --- RAII Busy Guard ---
+struct BusyGuard {
+    is_busy: Arc<AtomicBool>,
+}
+
+impl BusyGuard {
+    fn new(is_busy: Arc<AtomicBool>) -> Self {
+        is_busy.store(true, Ordering::SeqCst);
+        // Direct DLL call to set the cursor immediately
+        unsafe {
+            if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
+                SetCursor(Some(h_cursor));
+            }
+        }
+        Self { is_busy }
+    }
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.is_busy.store(false, Ordering::SeqCst);
+        // Next mouse move will restore the normal cursor automatically.
+    }
 }
 
 impl MyWindow {
@@ -273,7 +301,7 @@ impl MyWindow {
             sort_desc:    Arc::new(Mutex::new(true)),
             visible_cols: Arc::new(Mutex::new(config.visible_columns.clone())),
             config:       Arc::new(Mutex::new(config)),
-            is_busy:      Arc::new(Mutex::new(false)),
+            is_busy:      Arc::new(AtomicBool::new(false)),
             bold_font:    Arc::new(Mutex::new(None::<winsafe::guard::DeleteObjectGuard<winsafe::HFONT>>)),
         };
 
@@ -346,6 +374,33 @@ impl MyWindow {
                     if let Ok(hfont_bold) = winsafe::HFONT::CreateFontIndirect(&lf) {
                         *me.bold_font.lock().expect("Lock failed") = Some(hfont_bold);
                     }
+
+                    // --- HIGH-LEVEL SUBCLASSING FOR WAIT CURSOR ---
+                    let is_busy_flag = me.is_busy.clone();
+                    me.wnd.on().wm_set_cursor(move |p| {
+                        if is_busy_flag.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
+                            unsafe {
+                                if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
+                                    SetCursor(Some(h_cursor));
+                                    return Ok(true); // Handled, show wait cursor
+                                }
+                            }
+                        }
+                        Ok(false) // Default behavior
+                    });
+
+                    let is_busy_flag2 = me.is_busy.clone();
+                    me.lst_logs.on_subclass().wm_set_cursor(move |p| {
+                        if is_busy_flag2.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
+                            unsafe {
+                                if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
+                                    SetCursor(Some(h_cursor));
+                                    return Ok(true);
+                                }
+                            }
+                        }
+                        Ok(false)
+                    });
                 }
                 
                 // Initializing columns dynamically
@@ -358,22 +413,16 @@ impl MyWindow {
         self.wnd.on().wm(WM_LOAD_DONE, {
             let me = self.clone();
             move |_| {
-                *me.is_busy.lock().expect("Lock failed") = false;
-                
                 let count = me.filtered_ids.lock().expect("Lock failed").len();
-                let raw_str = me.raw_count.lock().expect("Lock failed").to_string();
+                let raw = *me.raw_count.lock().expect("Lock failed");
                 me.lst_logs.items().set_count(count as u32, None).expect("Set count failed");
                 
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-                let count_str = count.to_string();
+                let mut args = HashMap::new();
+                args.insert("count", count.to_string());
+                args.insert("raw", raw.to_string());
                 
-                let status_fmt = clean_tr(&loader.get("ui-status-display"))
-                    .replace("{ $count }", &count_str)
-                    .replace("{$count}", &count_str)
-                    .replace("{ $raw }", &raw_str)
-                    .replace("{$raw}", &raw_str);
-                
-                let _ = me.status_bar.parts().get(1).set_text(&status_fmt);
+                let _ = me.status_bar.parts().get(1).set_text(&loader.get_args("ui-status-display", args));
                 let _ = me.status_bar.parts().get(0).set_text("");
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
                 Ok(0)
@@ -383,7 +432,6 @@ impl MyWindow {
         self.wnd.on().wm(WM_LOAD_ERROR, {
             let me = self.clone();
             move |_| {
-                *me.is_busy.lock().expect("Lock failed") = false;
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let _ = me.status_bar.parts().get(1).set_text(&loader.get("ui-status-error"));
                 Ok(0)
@@ -460,8 +508,6 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            *self.is_busy.lock().expect("Lock failed") = true;
-            
             // Proactive safety: Clear list view count before background update starts (if not appending)
             if !self.cb_append.is_checked() {
                 let _ = self.lst_logs.items().set_count(0, None);
@@ -475,6 +521,7 @@ impl MyWindow {
             let sort_col_val = *self.sort_col.lock().expect("Lock failed");
             let sort_desc_val = *self.sort_desc.lock().expect("Lock failed");
 
+            let is_busy_bg = self.is_busy.clone();
             let all_items_bg = self.all_items.clone();
             let raw_count_bg = self.raw_count.clone();
             let filt_ids_bg = self.filtered_ids.clone();
@@ -483,6 +530,7 @@ impl MyWindow {
             let hwnd_raw = self.wnd.hwnd().ptr() as usize;
 
             thread::spawn(move || {
+                let _busy = BusyGuard::new(is_busy_bg);
                 let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                 match parse_full_logic(&path) {
                     Ok((items, raw_total)) => {
@@ -547,8 +595,7 @@ impl MyWindow {
             let result = file_dialog.GetResult()?;
             let folder_path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
             
-            *self.is_busy.lock().expect("Lock failed") = true;
-
+            
             // Proactive safety: Clear list view count before background update starts (if not appending)
             if !self.cb_append.is_checked() {
                 let _ = self.lst_logs.items().set_count(0, None);
@@ -563,12 +610,14 @@ impl MyWindow {
             let sort_desc_val = *self.sort_desc.lock().expect("Lock failed");
             let is_append = self.cb_append.is_checked();
 
+            let is_busy_bg = self.is_busy.clone();
             let all_items_bg = self.all_items.clone();
             let raw_count_bg = self.raw_count.clone();
             let filt_ids_bg = self.filtered_ids.clone();
             let hwnd_raw = self.wnd.hwnd().ptr() as usize;
 
             thread::spawn(move || {
+                let _busy = BusyGuard::new(is_busy_bg);
                 let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                 
                 let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
