@@ -345,12 +345,14 @@ impl MyWindow {
                     let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
 
                     // Create Bold Font
-                    if let Some(hfont) = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}) {
-                        let mut lf = hfont.GetObject().unwrap_or_default();
-                        lf.lfWeight = co::FW::BOLD;
-                        if let Ok(hfont_bold) = winsafe::HFONT::CreateFontIndirect(&lf) {
-                            *me.bold_font.lock().expect("Lock failed") = Some(hfont_bold);
-                        }
+                    let hfont = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}).unwrap_or_else(|| {
+                        winsafe::HFONT::GetStockObject(co::STOCK_FONT::DEFAULT_GUI).unwrap()
+                    });
+                    
+                    let mut lf = hfont.GetObject().unwrap_or_default();
+                    lf.lfWeight = co::FW::BOLD;
+                    if let Ok(hfont_bold) = winsafe::HFONT::CreateFontIndirect(&lf) {
+                        *me.bold_font.lock().expect("Lock failed") = Some(hfont_bold);
                     }
                 }
                 
@@ -926,10 +928,10 @@ impl MyWindow {
                         (*p_ptr).clrTextBk = color_ref;
                         
                         // Use dark colors for better contrast and requested style
-                        let text_color = if clr == (204, 255, 204) {
-                            winsafe::COLORREF::from_rgb(0, 100, 0) // Dark Green
-                        } else if clr == (255, 204, 204) {
-                            winsafe::COLORREF::from_rgb(150, 0, 0) // Dark Red
+                        let text_color = if clr == (220, 255, 220) {
+                            winsafe::COLORREF::from_rgb(0, 64, 0) // Very Dark Green
+                        } else if clr == (255, 220, 220) {
+                            winsafe::COLORREF::from_rgb(102, 0, 0) // Very Dark Red
                         } else if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
                             winsafe::COLORREF::from_rgb(0, 0, 0)
                         } else {
@@ -964,10 +966,10 @@ impl MyWindow {
                     unsafe {
                         (*p_ptr).clrTextBk = color_ref;
                         
-                        let text_color = if clr == (204, 255, 204) {
-                            winsafe::COLORREF::from_rgb(0, 100, 0) // Dark Green
-                        } else if clr == (255, 204, 204) {
-                            winsafe::COLORREF::from_rgb(150, 0, 0) // Dark Red
+                        let text_color = if clr == (220, 255, 220) {
+                            winsafe::COLORREF::from_rgb(0, 64, 0) // Very Dark Green
+                        } else if clr == (255, 220, 220) {
+                            winsafe::COLORREF::from_rgb(102, 0, 0) // Very Dark Red
                         } else if clr.0 as u16 + clr.1 as u16 + clr.2 as u16 > 380 { 
                             winsafe::COLORREF::from_rgb(0, 0, 0)
                         } else {
@@ -1169,8 +1171,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
             req.resp_type = map_packet_type(p_type);
             req.reason = map_reason(event.reason_code.as_deref().unwrap_or("0"));
             match p_type {
-                "2" => req.bg_color = Some((204, 255, 204)), // Web-safe light green
-                "3" => req.bg_color = Some((255, 204, 204)), // Web-safe light red
+                "2" => req.bg_color = Some((220, 255, 220)), // Pastel light green
+                "3" => req.bg_color = Some((255, 220, 220)), // Pastel light red
                 _ => {},
             }
         }
