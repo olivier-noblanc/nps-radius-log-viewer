@@ -375,8 +375,8 @@ impl MyWindow {
                 // Extended styles for ListView
                 unsafe {
                     me.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
-                        mask: co::LVS_EX::FULLROWSELECT,
-                        style: co::LVS_EX::FULLROWSELECT,
+                        mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+                        style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
                 }
 
@@ -980,7 +980,25 @@ impl MyWindow {
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
-            co::CDDS::ITEMPREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
+            co::CDDS::ITEMPREPAINT => {
+                let color = {
+                    let items = self.all_items.lock().expect("Lock failed");
+                    let ids = self.filtered_ids.lock().expect("Lock failed");
+                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
+                };
+
+                if let Some(clr) = color {
+                    let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
+                    if !is_selected {
+                        let color_ref = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                        if let Ok(brush) = winsafe::HBRUSH::CreateSolidBrush(color_ref) {
+                            let _ = p.mcd.hdc.FillRect(p.mcd.rc, &brush);
+                        }
+                        return unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw() | co::CDRF::SKIPDEFAULT.raw()) };
+                    }
+                }
+                co::CDRF::NOTIFYSUBITEMDRAW
+            },
             _ if p.mcd.dwDrawStage.raw() == (co::CDDS::ITEMPREPAINT.raw() | co::CDDS::SUBITEM.raw()) => {
                 let color = {
                     let items = self.all_items.lock().expect("Lock failed");
@@ -989,25 +1007,30 @@ impl MyWindow {
                 };
 
                 if let Some(clr) = color {
-                    let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                    let fg = if clr == (220, 255, 220) {
-                        winsafe::COLORREF::from_rgb(0, 64, 0)
-                    } else if clr == (255, 220, 220) {
-                        winsafe::COLORREF::from_rgb(102, 0, 0)
+                    let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
+                    if is_selected {
+                         co::CDRF::DODEFAULT
                     } else {
-                        winsafe::COLORREF::from_rgb(0, 0, 0)
-                    };
+                        let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                        let fg = if clr == (220, 255, 220) {
+                            winsafe::COLORREF::from_rgb(0, 64, 0)
+                        } else if clr == (255, 220, 220) {
+                            winsafe::COLORREF::from_rgb(102, 0, 0)
+                        } else {
+                            winsafe::COLORREF::from_rgb(0, 0, 0)
+                        };
 
-                    let p_ptr = std::ptr::from_ref(p).cast_mut();
-                    unsafe {
-                        (*p_ptr).clrTextBk = bg;
-                        (*p_ptr).clrText = fg;
-                        
-                        if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
-                            let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                        let p_ptr = std::ptr::from_ref(p).cast_mut();
+                        unsafe {
+                            (*p_ptr).clrTextBk = bg;
+                            (*p_ptr).clrText = fg;
+                            
+                            if let Some(hfont_guard) = self.bold_font.lock().expect("Lock failed").as_ref() {
+                                let _ = p.mcd.hdc.SelectObject(&**hfont_guard);
+                            }
                         }
+                        co::CDRF::NEWFONT
                     }
-                    co::CDRF::NEWFONT
                 } else {
                     co::CDRF::DODEFAULT
                 }
@@ -1021,15 +1044,6 @@ impl MyWindow {
     }
 
     fn refresh_columns(&self) {
-        // Disable Explorer theme (switch to Classic mode) on the ListView itself
-        let _ = self.lst_logs.hwnd().SetWindowTheme(" ", None);
-
-        // Disable Explorer theme on the Header too
-        let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
-        if h_header != winsafe::HWND::NULL {
-             let _ = h_header.SetWindowTheme(" ", None);
-        }
-
         while self.lst_logs.cols().count().unwrap_or(0) > 0 {
             unsafe {
                 let _ = self.lst_logs.hwnd().SendMessage(msg::lvm::DeleteColumn { index: 0 });

@@ -17,7 +17,7 @@
 # OS
 Thumbs.db
 Desktop.ini
-
+temp*.rs
 *.bak
 *.bak2
 *.bak3
