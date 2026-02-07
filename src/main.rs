@@ -369,8 +369,14 @@ impl MyWindow {
                         mask: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                         style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
                     });
-                    // Disable Explorer theme (switch to Classic mode) to ensure background colors work over RDP
+                    // Disable Explorer theme (switch to Classic mode) on the ListView itself to ensure background colors work correctly
                     let _ = winsafe::HWND::from_ptr(me.lst_logs.hwnd().ptr()).SetWindowTheme("", None);
+
+                    // Force Explorer theme on the Header so sort arrows remain visible
+                    let h_header = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}) }.unwrap_or(winsafe::HWND::NULL);
+                    if h_header != winsafe::HWND::NULL {
+                         let _ = h_header.SetWindowTheme("Explorer", None);
+                    }
 
                     // Create Bold Font
                     let hfont = me.lst_logs.hwnd().SendMessage(msg::wm::GetFont {}).unwrap_or_else(|| {
@@ -996,8 +1002,7 @@ impl MyWindow {
                         
                         let _ = p.mcd.hdc.SetTextColor(text_color);
                     }
-                    // Return SKIPDEFAULT to prevent Windows from erasing our manual background fill
-                    unsafe { co::CDRF::from_raw(co::CDRF::SKIPDEFAULT.raw() | co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
+                    unsafe { co::CDRF::from_raw(co::CDRF::NOTIFYSUBITEMDRAW.raw() | co::CDRF::NEWFONT.raw()) }
                 } else {
                     co::CDRF::NOTIFYSUBITEMDRAW
                 }
