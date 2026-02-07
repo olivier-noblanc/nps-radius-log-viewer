@@ -13,7 +13,7 @@ use std::fs;
 use std::collections::{HashMap, HashSet};
 use std::thread;
 
-use windows::Win32::UI::WindowsAndMessaging::{SetCursor, LoadCursorW, IDC_WAIT};
+use windows::Win32::UI::WindowsAndMessaging::{SetCursor, LoadCursorW, IDC_WAIT, IDC_ARROW};
 
 // --- Internationalization ---
 use i18n_embed::{
@@ -394,6 +394,11 @@ impl MyWindow {
                 let _ = me.status_bar.parts().get(1).set_text(&clean_tr(&msg));
                 let _ = me.status_bar.parts().get(0).set_text("");
                 me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
+                unsafe {
+                    if let Ok(h_cursor) = LoadCursorW(None, IDC_ARROW) {
+                        SetCursor(Some(h_cursor));
+                    }
+                }
                 Ok(0)
             }
         });
@@ -403,6 +408,11 @@ impl MyWindow {
             move |_| {
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let _ = me.status_bar.parts().get(1).set_text(&loader.get("ui-status-error"));
+                unsafe {
+                    if let Ok(h_cursor) = LoadCursorW(None, IDC_ARROW) {
+                        SetCursor(Some(h_cursor));
+                    }
+                }
                 Ok(0)
             }
         });
@@ -514,51 +524,57 @@ impl MyWindow {
             let hwnd_raw = self.wnd.hwnd().ptr() as usize;
 
             thread::spawn(move || {
-                let _busy = BusyGuard::new(is_busy_bg);
-                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
-                match parse_full_logic(&path) {
-                    Ok((items, raw_total)) => {
-                        let mut all_guard = all_items_bg.lock().expect("Lock failed");
-                        if is_append {
-                            all_guard.extend(items);
-                        } else {
-                            *all_guard = items;
+                let (res, _raw) = {
+                    let _busy = BusyGuard::new(is_busy_bg);
+                    let _hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                    match parse_full_logic(&path) {
+                        Ok((items, raw_total)) => {
+                            let mut all_guard = all_items_bg.lock().expect("Lock failed");
+                            if is_append {
+                                all_guard.extend(items);
+                            } else {
+                                *all_guard = items;
+                            }
+                            drop(all_guard);
+                            
+                            let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
+                            if is_append {
+                                *raw_guard += raw_total;
+                            } else {
+                                *raw_guard = raw_total;
+                            }
+                            drop(raw_guard);
+    
+                            apply_filter_logic(
+                                &all_items_bg, 
+                                &filt_ids_bg, 
+                                &query, 
+                                show_err_val,
+                                sort_col_val,
+                                sort_desc_val
+                            );
+                            (true, 0)
                         }
-                        drop(all_guard);
-                        
-                        let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
-                        if is_append {
-                            *raw_guard += raw_total;
-                        } else {
-                            *raw_guard = raw_total;
-                        }
-                        drop(raw_guard);
-
-                        apply_filter_logic(
-                            &all_items_bg, 
-                            &filt_ids_bg, 
-                            &query, 
-                            show_err_val,
-                            sort_col_val,
-                            sort_desc_val
-                        );
-                        
-                        unsafe {
-                            let _ = hwnd_bg.PostMessage(msg::WndMsg {
-                                msg_id: WM_LOAD_DONE,
-                                wparam: 0,
-                                lparam: 0,
-                            });
-                        }
+                        Err(_) => (false, 0)
                     }
-                    Err(_) => {
-                        unsafe {
-                            let _ = hwnd_bg.PostMessage(msg::WndMsg {
-                                msg_id: WM_LOAD_ERROR,
-                                wparam: 0,
-                                lparam: 0,
-                            });
-                        }
+                }; // _busy drops here, so is_busy becomes false BEFORE we post the message
+                
+                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                if res {
+                    unsafe {
+                        let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                            msg_id: WM_LOAD_DONE,
+                            wparam: 0,
+                            lparam: 0,
+                        });
+                    }
+                } else {
+                    unsafe {
+                        let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                            msg_id: WM_LOAD_ERROR,
+                            wparam: 0,
+                            lparam: 0,
+                        });
                     }
                 }
             });
@@ -601,67 +617,84 @@ impl MyWindow {
             let hwnd_raw = self.wnd.hwnd().ptr() as usize;
 
             thread::spawn(move || {
-                let _busy = BusyGuard::new(is_busy_bg);
-                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
-                
-                let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
-                if let Ok(entries) = fs::read_dir(&folder_path) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
-                            if let Ok(meta) = fs::metadata(&path) {
-                                if let Ok(modified) = meta.modified() {
-                                    files.push((path, modified));
+                let (res, _raw) = {
+                    let _busy = BusyGuard::new(is_busy_bg);
+                    let _hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                    
+                    let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
+                    if let Ok(entries) = fs::read_dir(&folder_path) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
+                                if let Ok(meta) = fs::metadata(&path) {
+                                    if let Ok(modified) = meta.modified() {
+                                        files.push((path, modified));
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                
-                files.sort_by_key(|f| f.1); 
-                
-                let mut total_items = Vec::new();
-                let mut total_raw = 0;
-
-                for (path, _) in files.into_iter() {
-                    let path_str = path.to_string_lossy();
-                    if let Ok((items, raw)) = parse_full_logic(&path_str) {
-                        total_items.extend(items);
-                        total_raw += raw;
+                    
+                    files.sort_by_key(|f| f.1); 
+                    
+                    let mut total_items = Vec::new();
+                    let mut total_raw_count = 0;
+                    
+                    for (file_path, _) in files {
+                        if let Ok((items, raw_c)) = parse_full_logic(file_path.to_str().unwrap_or("")) {
+                            total_items.extend(items);
+                            total_raw_count += raw_c;
+                        }
                     }
-                }
-
-                let mut all_guard = all_items_bg.lock().expect("Lock failed");
-                if is_append {
-                    all_guard.extend(total_items);
-                } else {
-                    *all_guard = total_items;
-                }
-                drop(all_guard);
-
-                let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
-                if is_append {
-                    *raw_guard += total_raw;
-                } else {
-                    *raw_guard = total_raw;
-                }
-                drop(raw_guard);
-
-                apply_filter_logic(
-                    &all_items_bg, 
-                    &filt_ids_bg, 
-                    &query, 
-                    show_err_val,
-                    sort_col_val,
-                    sort_desc_val
-                );
+    
+                    if !total_items.is_empty() {
+                         let mut all_guard = all_items_bg.lock().expect("Lock failed");
+                        if is_append {
+                            all_guard.extend(total_items);
+                        } else {
+                            *all_guard = total_items;
+                        }
+                        drop(all_guard);
+                        
+                        let mut raw_guard = raw_count_bg.lock().expect("Lock failed");
+                        if is_append {
+                            *raw_guard += total_raw_count;
+                        } else {
+                            *raw_guard = total_raw_count;
+                        }
+                        drop(raw_guard);
+    
+                        apply_filter_logic(
+                            &all_items_bg, 
+                            &filt_ids_bg, 
+                            &query, 
+                            show_err_val,
+                            sort_col_val,
+                            sort_desc_val
+                        );
+                        (true, 0)
+                    } else {
+                        (true, 0) // Empty folder is not an error per se
+                    }
+                }; // _busy drops here
                 
-                unsafe {
-                    let _ = hwnd_bg.PostMessage(msg::WndMsg {
-                        msg_id: WM_LOAD_DONE,
-                        wparam: 0,
-                        lparam: 0,
-                    });
+                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                if res {
+                    unsafe {
+                        let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                            msg_id: WM_LOAD_DONE,
+                            wparam: 0,
+                            lparam: 0,
+                        });
+                    }
+                } else {
+                     unsafe {
+                        let _ = hwnd_bg.PostMessage(msg::WndMsg {
+                            msg_id: WM_LOAD_ERROR,
+                            wparam: 0,
+                            lparam: 0,
+                        });
+                    }
                 }
             });
         }
