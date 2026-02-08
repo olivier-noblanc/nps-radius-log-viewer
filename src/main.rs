@@ -21,6 +21,23 @@ extern "system" {
     fn SetCursor(hcursor: isize) -> isize;
 }
 
+// --- FONCTION SAFE PUBLIQUE ---
+
+/// Définit le curseur système.
+/// Cette fonction est "Safe" car elle valide les entrées et encapsule l'unsafe.
+pub fn set_system_cursor(cursor_id: winsafe::co::IDC) {
+    // 1. Winsafe charge le curseur pour nous. Si ça échoue, on ne fait rien.
+    //    winsafe garantit que si Ok(hcursor), alors le pointeur est valide.
+    if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(cursor_id)) {
+        
+        // 2. On appelle l'API Windows via notre FFI.
+        //    Le bloc unsafe est confiné ici. Vous n'avez plus besoin de l'écrire ailleurs.
+        unsafe {
+            SetCursor(h_cursor.ptr() as isize);
+        }
+    }
+}
+
 // --- Internationalization ---
 use i18n_embed::{
     fluent::{fluent_language_loader, FluentLanguageLoader},
@@ -34,20 +51,41 @@ struct Localizations;
 
 static LANGUAGE_LOADER: OnceLock<FluentLanguageLoader> = OnceLock::new();
 
-const WM_LOAD_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 1) };
-const WM_LOAD_ERROR: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 2) };
-const WM_FILTER_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 3) }; // New message
-const WM_PROGRESS: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 10) }; // For progress bar
-const WM_FILE_CHANGED: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 11) }; // For Tail mode
-const WM_FORCE_WAIT: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 20) };
-const WM_FORCE_NORMAL: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 21) };
+// --- FONCTIONS SAFE WRAPPERS ---
+pub const fn make_wm_safe(v: u32) -> co::WM {
+    unsafe { co::WM::from_raw(v) }
+}
+
+pub fn send_message_safe<M>(hwnd: &winsafe::HWND, msg: M) -> M::RetType
+where M: winsafe::prelude::MsgSend,
+{
+    unsafe { hwnd.SendMessage(msg) }
+}
+
+pub fn post_message_safe<M>(hwnd: &winsafe::HWND, msg: M) -> winsafe::SysResult<()>
+where M: winsafe::prelude::MsgSend + Copy + Send + 'static,
+{
+    unsafe { hwnd.PostMessage(msg) }
+}
+
+pub fn clone_hicon(hicon: &winsafe::guard::DestroyIconGuard) -> winsafe::HICON {
+    unsafe { winsafe::HICON::from_ptr(hicon.ptr()) }
+}
+
+const WM_LOAD_DONE: co::WM = make_wm_safe(co::WM::USER.raw() + 1);
+const WM_LOAD_ERROR: co::WM = make_wm_safe(co::WM::USER.raw() + 2);
+const WM_FILTER_DONE: co::WM = make_wm_safe(co::WM::USER.raw() + 3); // New message
+const WM_PROGRESS: co::WM = make_wm_safe(co::WM::USER.raw() + 10); // For progress bar
+const WM_FILE_CHANGED: co::WM = make_wm_safe(co::WM::USER.raw() + 11); // For Tail mode
+const WM_FORCE_WAIT: co::WM = make_wm_safe(co::WM::USER.raw() + 20);
+const WM_FORCE_NORMAL: co::WM = make_wm_safe(co::WM::USER.raw() + 21);
 
 // Wrapper to satisfy the compiler for cross-thread usage.
 // We use isize to ensure Copy, and reconstruct inside the thread/closure.
 #[derive(Clone, Copy)]
 struct SafeHWND(isize);
-unsafe impl Send for SafeHWND {}
-unsafe impl Sync for SafeHWND {}
+// unsafe impl Send for SafeHWND {} // Auto-implemented for isize
+// unsafe impl Sync for SafeHWND {} // Auto-implemented for isize
 
 impl SafeHWND {
     fn from_hwnd(h: &winsafe::HWND) -> Self {
@@ -61,26 +99,22 @@ impl SafeHWND {
     /// Encapsulates the unsafe block for cleaner thread code
     fn send(&self, msg_id: co::WM, wparam: usize, lparam: isize) {
         let h = self.h();
-        unsafe {
-            let _ = h.SendMessage(msg::WndMsg {
-                msg_id,
-                wparam,
-                lparam,
-            });
-        }
+        let _ = send_message_safe(&h, msg::WndMsg {
+            msg_id,
+            wparam,
+            lparam,
+        });
     }
     
     /// Post a custom WM_USER message asynchronously
     /// Encapsulates the unsafe block for cleaner thread code
     fn post(&self, msg_id: co::WM, wparam: usize, lparam: isize) {
         let h = self.h();
-        unsafe {
-            let _ = h.PostMessage(msg::WndMsg {
-                msg_id,
-                wparam,
-                lparam,
-            });
-        }
+        let _ = post_message_safe(&h, msg::WndMsg {
+            msg_id,
+            wparam,
+            lparam,
+        });
     }
 }
 const IDT_SEARCH_TIMER: usize = 100; // ID for search timer
@@ -431,19 +465,19 @@ impl MyWindow {
 
         let me = self.clone();
         self.wnd.on().wm_create(move |_| {
-           // On force le thème "Explorer"
-           let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
+            // On force le thème "Explorer"
+            let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
 
             if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).and_then(|h| h.LoadIcon(winsafe::IdIdiStr::Id(1))) {
-                 let _ = unsafe { me.wnd.hwnd().SendMessage(msg::wm::SetIcon { 
-                     hicon: winsafe::HICON::from_ptr(hicon_guard.ptr()), 
-                     size: co::ICON_SZ::BIG 
-                 }) };
+                let _ = send_message_safe(&me.wnd.hwnd(), msg::wm::SetIcon {
+                    hicon: clone_hicon(&hicon_guard),
+                    size: co::ICON_SZ::BIG
+                });
             }
 
             // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
             // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
-            let ex_styles = co::LVS_EX::FULLROWSELECT 
+            let ex_styles = co::LVS_EX::FULLROWSELECT
                 | co::LVS_EX::DOUBLEBUFFER
                 | co::LVS_EX::HEADERDRAGDROP;
             me.lst_logs.set_extended_style(true, ex_styles);
@@ -451,31 +485,31 @@ impl MyWindow {
             // 3. Force a refresh
             me.lst_logs.hwnd().InvalidateRect(None, true).ok();
 
-            
+
             // Hide progress bar initially
             me.progress_bar.hwnd().ShowWindow(co::SW::HIDE);
-            
+
             me.refresh_columns();
             Ok(0)
         });
-        
+
         // Handle loading completion
         let me = self.clone();
         self.wnd.on().wm(WM_LOAD_DONE, move |_| {
             let count = me.filtered_ids.read().expect("Lock failed").len();
             let raw = *me.raw_count.read().expect("Lock failed");
             me.lst_logs.items().set_count(count as u32, None).expect("Set count failed");
-            
+
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
             let mut args = HashMap::new();
             args.insert("count", count.to_string());
             args.insert("raw", raw.to_string());
-            
+
             let msg = loader.get_args("ui-status-display", args);
             let _ = me.status_bar.parts().get(1).set_text(&clean_tr(&msg));
             let _ = me.status_bar.parts().get(0).set_text("");
             me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
-            
+
 
             Ok(0)
         });
@@ -485,7 +519,7 @@ impl MyWindow {
         self.wnd.on().wm(WM_LOAD_ERROR, move |_| {
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
             let _ = me.status_bar.parts().get(1).set_text(&loader.get("ui-status-error"));
-            
+
 
             me.is_busy.store(false, Ordering::SeqCst);
             me.trigger_async_filter(); // Initial filter
@@ -496,14 +530,14 @@ impl MyWindow {
         let me = self.clone();
         self.wnd.on().wm(WM_FILTER_DONE, move |_| {
             if let Ok(ids) = me.filtered_ids.read() {
-                 me.lst_logs.items().set_count(ids.len() as u32, None).expect("Set count failed");
+                me.lst_logs.items().set_count(ids.len() as u32, None).expect("Set count failed");
             }
             me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
             Ok(0)
         });
 
 
-        
+
         let me = self.clone();
         self.wnd.on().wm_timer(IDT_SEARCH_TIMER as usize, move || {
             me.wnd.hwnd().KillTimer(IDT_SEARCH_TIMER as usize).ok();
@@ -515,20 +549,20 @@ impl MyWindow {
         let me = self.clone();
         self.wnd.on().wm(WM_PROGRESS, move |p| {
             let percent = p.wparam as u32;
-            
+
             // Manage progress bar visibility and position
             if percent == 0 {
                 // Start of loading: show progress bar
                 let _ = me.progress_bar.hwnd().ShowWindow(co::SW::SHOW);
                 me.progress_bar.set_position(0);
-                
+
                 // Optional: also show in status bar
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let _ = me.status_bar.parts().get(0).set_text(&loader.get("ui-status-loading"));
             } else if percent >= 100 {
                 // End of loading: hide progress bar
                 let _ = me.progress_bar.hwnd().ShowWindow(co::SW::HIDE);
-                
+
                 // Reset status bar
                 let _ = me.status_bar.parts().get(0).set_text("");
             } else {
@@ -541,7 +575,7 @@ impl MyWindow {
         // --- Handle file change (Tail) ---
         let me = self.clone();
         self.wnd.on().wm(WM_FILE_CHANGED, move |_| {
-             me.handle_file_change();
+            me.handle_file_change();
             Ok(0)
         });
 
@@ -550,42 +584,40 @@ impl MyWindow {
         self.wnd.on().wm_key_down(move |p| {
             let v = p.vkey_code;
             let ctrl = (winsafe::GetAsyncKeyState(co::VK::CONTROL) as u16 & 0x8000) != 0;
-            
+
             if v.raw() == 'F' as u16 && ctrl {
                 let _ = me.txt_search.hwnd().SetFocus();
             } else if v.raw() == 'O' as u16 && ctrl {
-                 let _ = me.on_btn_open_clicked();
+                let _ = me.on_btn_open_clicked();
             } else if v == co::VK::F5 {
-                 if let Ok(guard) = me.current_file_path.lock() {
-                     if guard.is_some() {
-                         if let Ok(mut size_guard) = me.last_file_size.lock() {
-                             *size_guard = 0;
-                         }
-                         me.handle_file_change();
-                     }
-                 }
+                if let Ok(guard) = me.current_file_path.lock() {
+                    if guard.is_some() {
+                        if let Ok(mut size_guard) = me.last_file_size.lock() {
+                            *size_guard = 0;
+                        }
+                        me.handle_file_change();
+                    }
+                }
             }
             Ok(())
         });
 
         // --- Handle Cursor Forcing (Immediate) ---
         let me = self.clone();
-        
+
         // Message: Force Wait Cursor
         self.wnd.on().wm(WM_FORCE_WAIT, move |_| {
             // Get current mouse position
             let pt = winsafe::GetCursorPos().unwrap_or_default();
             let lst_hwnd = me.lst_logs.hwnd();
-            
+
             // Convert screen coordinates to ListView
             if let Ok(client_pt) = lst_hwnd.ScreenToClient(pt) {
                 if let Ok(rc) = lst_hwnd.GetClientRect() {
                     // CRUCIAL: Check IF mouse is INSIDE the list client area
                     // If mouse is over a button or border, don't force anything.
                     if client_pt.x >= 0 && client_pt.y >= 0 && client_pt.x < rc.right && client_pt.y < rc.bottom {
-                        if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-                            unsafe { SetCursor(h_cursor.ptr() as isize); }
-                        }
+                        set_system_cursor(co::IDC::WAIT);
                     }
                 }
             }
@@ -594,30 +626,27 @@ impl MyWindow {
 
         // Message: Force Arrow Cursor (Normal)
         self.wnd.on().wm(WM_FORCE_NORMAL, move |_| {
-            if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
-                unsafe { SetCursor(h_cursor.ptr() as isize); }
-            }
+            set_system_cursor(co::IDC::ARROW);
             Ok(0)
         });
-        
+
     }
 
     fn on_events(&self) {
         self.btn_open.on().bn_clicked({ let me = self.clone(); move || me.on_btn_open_clicked() });
         self.btn_open_folder.on().bn_clicked({ let me = self.clone(); move || me.on_btn_open_folder_clicked() });
-        
+
         // --- ListView Subclassing for Wait Cursor ---
+        // Default: If busy, Force Wait Cursor on SetCursor event
         let me = self.clone();
-        self.lst_logs.on_subclass().wm_set_cursor(move |p| {
-            if me.is_busy.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
-                if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
-                    unsafe { SetCursor(h_cursor.ptr() as isize); }
-                    return Ok(true);
-                }
+        self.wnd.on().wm_set_cursor(move |_| {
+            if me.is_busy.load(Ordering::SeqCst) {
+                set_system_cursor(co::IDC::WAIT);
+                return Ok(true); // Handled
             }
-            Ok(false)
+            Ok(false) // Let default handling proceed
         });
-        
+
         self.wnd.on().wm_context_menu({ let me = self.clone(); move |p| {
             let h_header_opt = me.lst_logs.header().map(|h| h.hwnd());
             let is_header = h_header_opt.map_or(false, |h| p.hwnd == *h);
@@ -629,7 +658,7 @@ impl MyWindow {
 
         self.lst_logs.on().lvn_get_disp_info({ let me = self.clone(); move |p| me.on_lst_lvn_get_disp_info(p) });
         self.lst_logs.on().lvn_column_click({ let me = self.clone(); move |p| me.on_lst_lvn_column_click(p) });
-        
+
         // Search: Start a timer instead of filtering directly
         self.txt_search.on().en_change({ let me = self.clone(); move || {
             // 300ms delay (Debounce)
@@ -667,10 +696,10 @@ impl MyWindow {
                                 // If p.pszText() returns Option<String>, it's read-only wrapper?
                                 // Let's try unsafe pointer write if we can get the pointer.
                                 // But struct fields are private.
-                                // If there is no setter, we might be stuck with unsafe transmute or just skipping it for now 
+                                // If there is no setter, we might be stuck with unsafe transmute or just skipping it for now
                                 // if we can't find the proper way.
                                 // TODO: Fix tooltips properly.
-                                // let _ = p.set_text(&text); 
+                                // let _ = p.set_text(&text);
                             }
                         }
                     }
@@ -698,7 +727,7 @@ impl MyWindow {
     // --- Logique de filtrage asynchrone ---
     fn on_btn_about_clicked(&self) -> winsafe::AnyResult<()> {
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-        let about_msg = format!("{}\n\n{}", 
+        let about_msg = format!("{}\n\n{}",
             clean_tr(&loader.get("about_text")),
             clean_tr(&loader.get("about_shortcuts"))
         );
@@ -720,16 +749,16 @@ impl MyWindow {
             self.jump_to_error(if direction > 0 { -1 } else { len }, direction);
             return;
         }
-        
+
         // Get first selected index
         let start_idx = self.lst_logs.items().iter_selected().next().map(|item| item.index()).unwrap_or(std::u32::MAX);
-        
+
         // start_idx is u32 from GetNextItem (some impls). If it's Option<u32>, unwrap gives u32.
         // If message returns Option<u32>, check signature. Usually Option<u32>.
         // Winsafe returns Option<u32>. u32::MAX is weird if not found. Let's use logic.
-        
+
         let start_i32 = if start_idx == std::u32::MAX { -1 } else { start_idx as i32 };
-        
+
         self.jump_to_error(start_i32, direction);
     }
 
@@ -742,7 +771,7 @@ impl MyWindow {
 
         let mut current = start_idx + direction;
         let mut found_idx: Option<i32> = None;
-        
+
         // Loop to find next line with log error
         // Limit to avoid infinite loop if 0 errors found
         for _ in 0..len {
@@ -763,13 +792,13 @@ impl MyWindow {
         if let Some(current) = found_idx {
             // Select item via safe API
             let _ = self.lst_logs.items().select_all(false);
-            
+
             // Select and Focus new item
             let item = self.lst_logs.items().get(current as u32);
             item.select(true).ok();
             item.focus().ok();
             let _ = item.ensure_visible();
-            
+
             self.lst_logs.hwnd().SetFocus();
             return;
         }
@@ -780,69 +809,69 @@ impl MyWindow {
         let path_opt = self.current_file_path.lock().unwrap().clone();
         if let Some(path) = path_opt {
             // Update size for next time
-            if let Ok(metadata) = fs::metadata(&path) {
+            if let Ok(metadata) = std::fs::metadata(&path) {
                 let new_size = metadata.len();
                 let mut last_size = self.last_file_size.lock().unwrap();
-                
+
                 if new_size > *last_size {
                     // File grew: reload everything for now (safer for XML)
                     // Ideally: read delta and parse fragment
                     *last_size = new_size;
-                    
-                    // Trigger a reload as if Open was clicked, 
+
+                    // Trigger a reload as if Open was clicked,
                     // but without dialog and in background
                     let me = self.clone();
                     // Reuse existing loading logic but adapted
                     // Simplified: simulate Open click if possible without dialog,
                     // but since on_btn_open_clicked opens a dialog, we extract the logic.
-                    
+
                     // Call loading logic directly in a thread
                     // Note: handle is_busy flag
-                        if !me.is_busy.load(Ordering::SeqCst) {
-                            let _ = me.status_bar.parts().get(1).set_text("File changed, reloading...");
-                            
-                            let is_busy_bg = me.is_busy.clone();
-                            let all_items_bg = me.all_items.clone();
-                            let raw_count_bg = me.raw_count.clone();
-                            let safe_hwnd = SafeHWND::from_hwnd(&me.wnd.hwnd());
-                            let path_bg = path.clone();
+                    if !me.is_busy.load(Ordering::SeqCst) {
+                        let _ = me.status_bar.parts().get(1).set_text("File changed, reloading...");
 
-                            thread::spawn(move || {
-                                // 1. Start busy guard
-                                let busy = BusyGuard::new(is_busy_bg);
-                                
-                                // 2. FORCE CURSOR IMMEDIATELY
-                                safe_hwnd.send(WM_FORCE_WAIT, 0, 0);
+                        let is_busy_bg = me.is_busy.clone();
+                        let all_items_bg = me.all_items.clone();
+                        let raw_count_bg = me.raw_count.clone();
+                        let safe_hwnd = SafeHWND::from_hwnd(&me.wnd.hwnd());
+                        let path_bg = path.clone();
 
-                                // Parse entire file
-                                match parse_full_logic(&path_bg, Some(safe_hwnd)) { 
-                                    Ok((reqs, raw)) => {
-                                        {
-                                            let mut items = all_items_bg.write().expect("Lock failed");
-                                            *items = reqs;
-                                            let mut r = raw_count_bg.write().expect("Lock failed");
-                                            *r = raw;
-                                        }
-                                        
-                                        drop(busy); // Release is_busy flag
+                        thread::spawn(move || {
+                            // 1. Start busy guard
+                            let busy = BusyGuard::new(is_busy_bg);
 
-                                        // 4. FORCE ARROW RETURN
-                                        safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
+                            // 2. FORCE CURSOR IMMEDIATELY
+                            let _ = post_message_safe(&safe_hwnd.h(), msg::WndMsg { msg_id: WM_FORCE_WAIT, wparam: 0, lparam: 0 });
 
-                                        // Notify UI that it's done
-                                        safe_hwnd.post(WM_LOAD_DONE, 0, 0);
+                            // Parse entire file
+                            match parse_full_logic(&path_bg, Some(safe_hwnd)) {
+                                Ok((reqs, raw)) => {
+                                    {
+                                        let mut items = all_items_bg.write().expect("Lock failed");
+                                        *items = reqs;
+                                        let mut r = raw_count_bg.write().expect("Lock failed");
+                                        *r = raw;
                                     }
-                                    Err(e) => {
-                                        eprintln!("Reload error: {:?}", e);
-                                        drop(busy); 
 
-                                        safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
+                                    drop(busy); // Release is_busy flag
 
-                                        safe_hwnd.post(WM_LOAD_ERROR, 0, 0);
-                                    }
+                                    // 4. FORCE ARROW RETURN
+                                    let _ = post_message_safe(&safe_hwnd.h(), msg::WndMsg { msg_id: WM_FORCE_NORMAL, wparam: 0, lparam: 0 });
+
+                                    // Notify UI that it's done
+                                    let _ = post_message_safe(&safe_hwnd.h(), msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 });
                                 }
-                            });
-                        }
+                                Err(e) => {
+                                    eprintln!("Reload error: {:?}", e);
+                                    drop(busy);
+
+                                    let _ = post_message_safe(&safe_hwnd.h(), msg::WndMsg { msg_id: WM_FORCE_NORMAL, wparam: 0, lparam: 0 });
+
+                                    let _ = post_message_safe(&safe_hwnd.h(), msg::WndMsg { msg_id: WM_LOAD_ERROR, wparam: 0, lparam: 0 });
+                                }
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -863,21 +892,19 @@ impl MyWindow {
         thread::spawn(move || {
             let h = safe_hwnd.h();
             apply_filter_logic(
-                &all_items_bg, 
-                &filt_ids_bg, 
-                &query, 
+                &all_items_bg,
+                &filt_ids_bg,
+                &query,
                 show_err_val,
                 sort_col_val,
                 sort_desc_val
             );
-            
-            unsafe {
-                let _ = h.PostMessage(msg::WndMsg {
-                    msg_id: WM_FILTER_DONE,
-                    wparam: 0,
-                    lparam: 0,
-                });
-            }
+
+            let _ = post_message_safe(&h, msg::WndMsg {
+                msg_id: WM_FILTER_DONE,
+                wparam: 0,
+                lparam: 0,
+            });
         });
     }
 
@@ -888,13 +915,13 @@ impl MyWindow {
         // 1. File Dialog
         // 2. Thread Spawn (load) -> Apply Filter Logic -> Post WM_LOAD_DONE
         // Note: File loading remains synchronous in the background thread, which is fine.
-        
+
         let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
             &co::CLSID::FileOpenDialog, None::<&winsafe::IUnknown>, co::CLSCTX::INPROC_SERVER,
         )?;
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         file_dialog.SetFileTypes(&[(loader.get("ui-file-log"), "*.log".to_owned()), (loader.get("ui-file-all"), "*.*".to_owned())])?;
-        
+
         if file_dialog.Show(self.wnd.hwnd())? {
             let result = file_dialog.GetResult()?;
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
@@ -902,32 +929,30 @@ impl MyWindow {
             // --- WATCHER SETUP ---
             // Deactivate the previous watcher
             *self.watcher.lock().unwrap() = None;
-            
+
             if !self.cb_append.is_checked() {
                 *self.current_file_path.lock().unwrap() = Some(path.clone());
-                 if let Ok(meta) = fs::metadata(&path) {
-                     *self.last_file_size.lock().unwrap() = meta.len();
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    *self.last_file_size.lock().unwrap() = meta.len();
                 }
 
                 let safe_hwnd_watcher = SafeHWND::from_hwnd(&self.wnd.hwnd());
                 let mut new_watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
                     match res {
                         Ok(event) => {
-                             if event.kind.is_modify() || event.kind.is_create() {
+                            if event.kind.is_modify() || event.kind.is_create() {
                                 std::thread::sleep(Duration::from_millis(500));
-                                unsafe {
-                                    let h = safe_hwnd_watcher.h();
-                                    let _ = h.PostMessage(msg::WndMsg {
-                                        msg_id: WM_FILE_CHANGED,
-                                        wparam: 0,
-                                        lparam: 0,
-                                    });
-                                }
-                             }
+                                let h = safe_hwnd_watcher.h();
+                                let _ = post_message_safe(&h, msg::WndMsg {
+                                    msg_id: WM_FILE_CHANGED,
+                                    wparam: 0,
+                                    lparam: 0,
+                                });
+                            }
                         }
                         Err(e) => eprintln!("Watch error: {:?}", e),
                     }
-                }).ok(); 
+                }).ok();
 
                 if let Some(w) = &mut new_watcher {
                     if let Some(parent) = std::path::Path::new(&path).parent() {
@@ -1214,7 +1239,7 @@ impl MyWindow {
             
             // Get subitem info manually since winsafe doesn't expose it
             let mut lvhti = winsafe::LVHITTESTINFO { pt: pt_client, ..Default::default() };
-            unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::HitTest { info: &mut lvhti }); }
+            send_message_safe(&self.lst_logs.hwnd(), msg::lvm::HitTest { info: &mut lvhti });
             let subitem_index = lvhti.iSubItem;
                 let h_menu = winsafe::HMENU::CreatePopupMenu()?;
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
@@ -1311,19 +1336,15 @@ impl MyWindow {
                 
                 // --- Détection active ---
                 // On vérifie la sélection ET le focus (clavier)
-                let is_selected = unsafe {
-                    self.lst_logs.hwnd().SendMessage(msg::lvm::GetItemState {
-                        index: item_idx,
-                        mask: co::LVIS::SELECTED,
-                    }).has(co::LVIS::SELECTED)
-                };
+                let is_selected = send_message_safe(&self.lst_logs.hwnd(), msg::lvm::GetItemState {
+                    index: item_idx,
+                    mask: co::LVIS::SELECTED,
+                }).has(co::LVIS::SELECTED);
 
-                let focused_idx = unsafe { 
-                    self.lst_logs.hwnd().SendMessage(msg::lvm::GetNextItem {
-                        initial_index: Some(u32::MAX),
-                        relationship: co::LVNI::FOCUSED
-                    })
-                };
+                let focused_idx = send_message_safe(&self.lst_logs.hwnd(), msg::lvm::GetNextItem {
+                    initial_index: Some(u32::MAX),
+                    relationship: co::LVNI::FOCUSED
+                });
                 let is_focused = focused_idx.map(|i| i == item_idx).unwrap_or(false);
 
                 let is_active = is_selected || is_focused;
@@ -1339,7 +1360,7 @@ impl MyWindow {
                     // Si la ligne a une couleur personnalisée (Modern Green ou Modern Red)
                     
                     let (bg, text_col) = if is_active {
-                        // --- SÉLECTIONNÉ (Variantes assombries pour le contraste) ---
+                        // --- SÉLECTIONNÉ (Variants assombries pour le contraste) ---
                         // Si le fond est VERT (25, 135, 84)
                         // Si le fond est ROUGE (220, 53, 69)
                         let bg_color = if clr.0 == 25 { 
@@ -1383,7 +1404,7 @@ impl MyWindow {
 
     fn refresh_columns(&self) {
         while self.lst_logs.cols().count().unwrap_or(0) > 0 {
-            let _ = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::DeleteColumn { index: 0 }) };
+            let _ = send_message_safe(&self.lst_logs.hwnd(), msg::lvm::DeleteColumn { index: 0 });
         }
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         let visible = self.visible_cols.read().expect("Lock failed").clone();
@@ -1441,12 +1462,10 @@ impl MyWindow {
 
             // 5. Send message directly to Header
             // This is more robust than LVM_SETCOLUMN for sort flags
-            unsafe {
-                h_header.SendMessage(msg::hdm::SetItem {
-                    index: i as u32,
-                    hditem: &hdi,
-                });
-            }
+            let _ = send_message_safe(&h_header, msg::hdm::SetItem {
+                index: i as u32,
+                hditem: &hdi,
+            });
         }
     }
 }
@@ -1555,13 +1574,11 @@ fn parse_full_logic(path: &str, hwnd: Option<SafeHWND>) -> anyhow::Result<(Vec<R
                     let h = sh.h();
                     let pct = ((end_pos * 50) / total_len) as u8;
                     if pct > last_progress {
-                        unsafe {
-                            let _ = h.PostMessage(msg::WndMsg {
-                                msg_id: WM_PROGRESS,
-                                wparam: pct as usize,
-                                lparam: 0,
-                            });
-                        }
+                        let _ = post_message_safe(&h, msg::WndMsg {
+                            msg_id: WM_PROGRESS,
+                            wparam: pct as usize,
+                            lparam: 0,
+                        });
                         last_progress = pct;
                     }
                 }
@@ -1596,13 +1613,11 @@ fn parse_full_logic(path: &str, hwnd: Option<SafeHWND>) -> anyhow::Result<(Vec<R
                 
                 if current % step == 0 {
                     let pct = 50 + ((current * 50) / total_blobs);
-                    unsafe {
-                        let _ = h.PostMessage(msg::WndMsg {
-                            msg_id: WM_PROGRESS,
-                            wparam: pct as usize,
-                            lparam: 0,
-                        });
-                    }
+                    let _ = post_message_safe(&h, msg::WndMsg {
+                        msg_id: WM_PROGRESS,
+                        wparam: pct as usize,
+                        lparam: 0,
+                    });
                 }
             }
             res
