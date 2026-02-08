@@ -401,8 +401,8 @@ impl MyWindow {
 
         let me = self.clone();
         self.wnd.on().wm_create(move |_| {
-            // 1. Re-enable Explorer theme as it's "better" now with simplified drawing
-            let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
+           // On passe une chaîne vide pour désactiver le thème visuel (repasser en "Classique")
+           let _ = me.lst_logs.hwnd().SetWindowTheme("", Some(""));
 
             if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).and_then(|h| h.LoadIcon(winsafe::IdIdiStr::Id(1))) {
                  let _ = unsafe { me.wnd.hwnd().SendMessage(msg::wm::SetIcon { 
@@ -592,8 +592,9 @@ impl MyWindow {
         });
         
         self.wnd.on().wm_context_menu({ let me = self.clone(); move |p| {
-            let h_header = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}).unwrap_or(winsafe::HWND::NULL) };
-            if p.hwnd == *me.lst_logs.hwnd() || p.hwnd == h_header {
+            let h_header_opt = me.lst_logs.header().map(|h| h.hwnd());
+            let is_header = h_header_opt.map_or(false, |h| p.hwnd == *h);
+            if p.hwnd == *me.lst_logs.hwnd() || is_header {
                 me.on_lst_context_menu(p.cursor_pos, p.hwnd)?;
             }
             Ok(())
@@ -687,7 +688,7 @@ impl MyWindow {
         // 1. Trouver l'index sélectionné actuel
         let selected = self.lst_logs.items().selected_count();
         if selected == 0 {
-            let len = self.filtered_ids.read().expect("Lock failed").len() as i32;
+            let len = self.lst_logs.items().count() as i32;
             // If nothing selected, start BEFORE first or AFTER last to check the whole range
             self.jump_to_error(if direction > 0 { -1 } else { len }, direction);
             return;
@@ -1410,9 +1411,7 @@ impl MyWindow {
     
     fn update_headers(&self) {
         // 1. Get handle of the Header control (title bar)
-        let h_header = unsafe { self.lst_logs.hwnd()
-            .SendMessage(msg::lvm::GetHeader {})
-            .expect("Failed to get header") };
+        let h_header = self.lst_logs.header().map(|h| h.hwnd()).expect("Failed to get header");
 
         let (visible, sort_col, sort_desc) = {
             let v = self.visible_cols.read().expect("Lock failed").clone();
