@@ -30,12 +30,12 @@ static LANGUAGE_LOADER: OnceLock<FluentLanguageLoader> = OnceLock::new();
 
 const WM_LOAD_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 1) };
 const WM_LOAD_ERROR: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 2) };
-const WM_FILTER_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 3) }; // Nouveau message
-const WM_PROGRESS: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 10) }; // Pour la barre de progression
-const WM_FILE_CHANGED: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 11) }; // Pour le Tail mode
+const WM_FILTER_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 3) }; // New message
+const WM_PROGRESS: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 10) }; // For progress bar
+const WM_FILE_CHANGED: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 11) }; // For Tail mode
 const WM_FORCE_WAIT: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 20) };
 const WM_FORCE_NORMAL: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 21) };
-const IDT_SEARCH_TIMER: usize = 100; // ID pour le timer de recherche
+const IDT_SEARCH_TIMER: usize = 100; // ID for search timer
 
 // IDs pour le menu Font
 
@@ -88,6 +88,8 @@ struct RadiusRequest {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
+    window_x: i32,
+    window_y: i32,
     window_width: i32,
     window_height: i32,
     column_widths: Vec<i32>,
@@ -97,7 +99,9 @@ struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            window_width: 1000, // Valeur par défaut un peu plus grande
+            window_x: 0,
+            window_y: 0,
+            window_width: 1000, // Slightly larger default value
             window_height: 700,
             column_widths: vec![150, 120, 120, 110, 150, 130, 150, 150, 350, 150],
             visible_columns: LogColumn::all(),
@@ -117,12 +121,14 @@ impl AppConfig {
 
         if cfg.window_width <= 100 || cfg.window_width > screen_cx { cfg.window_width = 1000; }
         if cfg.window_height <= 100 || cfg.window_height > screen_cy { cfg.window_height = 700; }
+        
+        // If window_x or window_y is 0 (or out of bounds), reset to 0 (default centering might be better in MyWindow::new)
+        if cfg.window_x < -2000 || cfg.window_x > screen_cx { cfg.window_x = 0; }
+        if cfg.window_y < -2000 || cfg.window_y > screen_cy { cfg.window_y = 0; }
 
-        let canonical_order = LogColumn::all();
-        for col in &canonical_order {
-            if !cfg.visible_columns.contains(col) { cfg.visible_columns.push(*col); }
+        if cfg.visible_columns.is_empty() {
+            cfg.visible_columns = LogColumn::all();
         }
-        cfg.visible_columns.sort_by_key(|col| canonical_order.iter().position(|c| c == col).unwrap_or(999));
         cfg
     }
 
@@ -134,12 +140,12 @@ impl AppConfig {
 }
 
 impl RadiusRequest {
-    // OPTIMISATION: Recherche 'case-insensitive' sans allocation intermédiaire massive
-    // On change la signature pour accepter &str (déjà lowercase)
+    // OPTIMIZATION: Case-insensitive search without massive intermediate allocation
+    // Change signature to accept &str (already lowercase)
     fn matches(&self, query_lower: &str) -> bool {
         if query_lower.is_empty() { return true; }
         
-        // Helper pour vérifier un champ (on convertit le champ en minuscule pour comparer)
+        // Helper to check a field (convert field to lowercase for comparison)
         let check = |s: &str| s.to_ascii_lowercase().contains(query_lower);
 
         check(&self.user) 
@@ -321,28 +327,54 @@ impl MyWindow {
 
     fn on_wm_events(&self) {
         let me = self.clone();
+        
+        // Restore window position on creation
+        self.wnd.on().wm_create(move |_| {
+            let config = me.config.read().expect("Lock failed");
+            if config.window_x != 0 || config.window_y != 0 {
+                let mut pt = winsafe::POINT::default();
+                pt.x = config.window_x;
+                pt.y = config.window_y;
+                let mut sz = winsafe::SIZE::default();
+                sz.cx = config.window_width;
+                sz.cy = config.window_height;
+
+                unsafe {
+                    me.wnd.hwnd().SetWindowPos(
+                        winsafe::HwndPlace::Hwnd(winsafe::HWND::from_ptr(-2isize as *mut _)), // NoZOrder (HWND_NOTOPMOST)
+                        pt,
+                        sz,
+                        co::SWP::NOZORDER,
+                    ).ok();
+                }
+            }
+            Ok(0)
+        });
+
+        let me = self.clone();
         self.wnd.on().wm_close(move || {
-            // Sauvegarde config (Lecture seule sur les RwLock ici)
+            // Save config (Read-only on RwLock here)
             let visible = me.visible_cols.read().expect("Lock failed").clone();
             let config_read = me.config.read().expect("Lock failed");
             let all_cols = LogColumn::all();
 
-            let mut config_save = config_read.clone(); // Clone locale pour modification
+            let mut config_save = config_read.clone(); // Local clone for modification
             drop(config_read);
 
             for (i, &col) in visible.iter().enumerate() {
                 let col_idx = all_cols.iter().position(|&c| c == col).unwrap_or(0);
-                // Accès direct sans unsafe si possible, ouSendMessage sécurisé
-                let width = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::GetColumnWidth { index: i as u32 }) }.unwrap_or(100);
+                let width = me.lst_logs.cols().get(i as u32).width().unwrap_or(100);
                 if col_idx < config_save.column_widths.len() {
                     config_save.column_widths[col_idx] = width as i32;
                 }
             }
             config_save.visible_columns.clone_from(&visible);
             
-            let rect = me.wnd.hwnd().GetClientRect().expect("Get window rect failed");
-            config_save.window_width = rect.right;
-            config_save.window_height = rect.bottom;
+            let rect = me.wnd.hwnd().GetWindowRect().expect("Get window rect failed");
+            config_save.window_x = rect.left;
+            config_save.window_y = rect.top;
+            config_save.window_width = rect.right - rect.left;
+            config_save.window_height = rect.bottom - rect.top;
             
             let _ = config_save.save();
             
@@ -363,28 +395,24 @@ impl MyWindow {
                  }) };
             }
 
-            // 2. Ensuite, activer les styles étendus (FullRowSelect, DoubleBuffer, etc.)
-            let _ = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
-                        mask: co::LVS_EX::FULLROWSELECT 
-                            | co::LVS_EX::DOUBLEBUFFER
-                            | co::LVS_EX::HEADERDRAGDROP,
-                        style: co::LVS_EX::FULLROWSELECT 
-                            | co::LVS_EX::DOUBLEBUFFER 
-                            | co::LVS_EX::HEADERDRAGDROP,
-                    }) };
+            // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
+            let ex_styles = co::LVS_EX::FULLROWSELECT 
+                | co::LVS_EX::DOUBLEBUFFER
+                | co::LVS_EX::HEADERDRAGDROP;
+            me.lst_logs.set_extended_style(true, ex_styles);
 
-            // 3. Forcer un rafraîchissement
+            // 3. Force a refresh
             me.lst_logs.hwnd().InvalidateRect(None, true).ok();
 
             
-            // Cacher la progress bar initialement
+            // Hide progress bar initially
             me.progress_bar.hwnd().ShowWindow(co::SW::HIDE);
             
             me.refresh_columns();
             Ok(0)
         });
         
-        // Gestion de la fin du chargement
+        // Handle loading completion
         let me = self.clone();
         self.wnd.on().wm(WM_LOAD_DONE, move |_| {
             let count = me.filtered_ids.read().expect("Lock failed").len();
@@ -405,7 +433,7 @@ impl MyWindow {
             Ok(0)
         });
 
-        // Gestion des erreurs de chargement
+        // Handle loading errors
         let me = self.clone();
         self.wnd.on().wm(WM_LOAD_ERROR, move |_| {
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
@@ -417,7 +445,7 @@ impl MyWindow {
             Ok(0)
         });
 
-        // Gestion de la fin du filtre (Search)
+        // Handle filter completion (Search)
         let me = self.clone();
         self.wnd.on().wm(WM_FILTER_DONE, move |_| {
             if let Ok(ids) = me.filtered_ids.read() {
@@ -441,20 +469,20 @@ impl MyWindow {
         self.wnd.on().wm(WM_PROGRESS, move |p| {
             let percent = p.wparam as u32;
             
-            // Gérer la visibilité et la position de la progress bar
+            // Manage progress bar visibility and position
             if percent == 0 {
-                // Début du chargement : montrer la progress bar
+                // Start of loading: show progress bar
                 let _ = me.progress_bar.hwnd().ShowWindow(co::SW::SHOW);
                 me.progress_bar.set_position(0);
                 
-                // Optionnel : afficher aussi dans la status bar
+                // Optional: also show in status bar
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 let _ = me.status_bar.parts().get(0).set_text(&loader.get("ui-status-loading"));
             } else if percent >= 100 {
-                // Fin du chargement : cacher la progress bar
+                // End of loading: hide progress bar
                 let _ = me.progress_bar.hwnd().ShowWindow(co::SW::HIDE);
                 
-                // Réinitialiser la status bar
+                // Reset status bar
                 let _ = me.status_bar.parts().get(0).set_text("");
             } else {
                 // Mise à jour de la progression
@@ -463,14 +491,14 @@ impl MyWindow {
             Ok(0)
         });
 
-        // --- Gestion du changement de fichier (Tail) ---
+        // --- Handle file change (Tail) ---
         let me = self.clone();
         self.wnd.on().wm(WM_FILE_CHANGED, move |_| {
              me.handle_file_change();
             Ok(0)
         });
 
-        // --- Gestion des Raccourcis Clavier ---
+        // --- Handle Keyboard Shortcuts ---
         let me = self.clone();
         self.wnd.on().wm_key_down(move |p| {
             let v = p.vkey_code;
@@ -493,20 +521,20 @@ impl MyWindow {
             Ok(())
         });
 
-        // --- Gestion du "Forçage" du Curseur (Immédiat) ---
+        // --- Handle Cursor Forcing (Immediate) ---
         let me = self.clone();
         
-        // Message : Forcer le Sablier
+        // Message: Force Wait Cursor
         self.wnd.on().wm(WM_FORCE_WAIT, move |_| {
-            // On récupère la position actuelle de la souris
+            // Get current mouse position
             let pt = winsafe::GetCursorPos().unwrap_or_default();
             let lst_hwnd = me.lst_logs.hwnd();
             
-            // On convertit les coordonnées écran vers la ListView
+            // Convert screen coordinates to ListView
             if let Ok(client_pt) = lst_hwnd.ScreenToClient(pt) {
                 if let Ok(rc) = lst_hwnd.GetClientRect() {
-                    // CRUCIAL : On vérifie SI la souris est DANS la zone client de la liste
-                    // Si la souris est sur un bouton ou une bordure, on ne force RIEN.
+                    // CRUCIAL: Check IF mouse is INSIDE the list client area
+                    // If mouse is over a button or border, don't force anything.
                     if client_pt.x >= 0 && client_pt.y >= 0 && client_pt.x < rc.right && client_pt.y < rc.bottom {
                         unsafe {
                             if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
@@ -519,7 +547,7 @@ impl MyWindow {
             Ok(0)
         });
 
-        // Message : Forcer la Flèche (Normal)
+        // Message: Force Arrow Cursor (Normal)
         self.wnd.on().wm(WM_FORCE_NORMAL, move |_| {
             unsafe {
                 if let Ok(h_cursor) = LoadCursorW(None, IDC_ARROW) {
@@ -558,14 +586,14 @@ impl MyWindow {
         self.lst_logs.on().lvn_get_disp_info({ let me = self.clone(); move |p| me.on_lst_lvn_get_disp_info(p) });
         self.lst_logs.on().lvn_column_click({ let me = self.clone(); move |p| me.on_lst_lvn_column_click(p) });
         
-        // Search : Au lieu de filtrer, on lance un timer
+        // Search: Start a timer instead of filtering directly
         self.txt_search.on().en_change({ let me = self.clone(); move || {
-            // 300ms de délai (Debounce)
+            // 300ms delay (Debounce)
             let _ = me.wnd.hwnd().SetTimer(IDT_SEARCH_TIMER, 300, None);
             Ok(())
         }});
 
-        // --- Tooltips (Info-bulles) ---
+        // --- Tooltips ---
         self.lst_logs.on().lvn_get_info_tip({
             let me = self.clone();
             move |p| {
@@ -626,8 +654,12 @@ impl MyWindow {
     // --- Logique de filtrage asynchrone ---
     fn on_btn_about_clicked(&self) -> winsafe::AnyResult<()> {
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        let about_msg = format!("{}\n\n{}", 
+            clean_tr(&loader.get("about_text")),
+            clean_tr(&loader.get("about_shortcuts"))
+        );
         self.wnd.hwnd().MessageBox(
-            &clean_tr(&loader.get("about_text")),
+            &about_msg,
             &clean_tr(&loader.get("about_title")),
             co::MB::OK | co::MB::ICONINFORMATION,
         )?;
@@ -720,33 +752,33 @@ impl MyWindow {
     fn handle_file_change(&self) {
         let path_opt = self.current_file_path.lock().unwrap().clone();
         if let Some(path) = path_opt {
-            // Mettre à jour la taille pour la prochaine fois
+            // Update size for next time
             if let Ok(metadata) = fs::metadata(&path) {
                 let new_size = metadata.len();
                 let mut last_size = self.last_file_size.lock().unwrap();
                 
                 if new_size > *last_size {
-                    // Le fichier a grossi : on recharge tout pour l'instant (plus sûr pour XML)
-                    // Idéalement : lire le delta et parser le fragment
+                    // File grew: reload everything for now (safer for XML)
+                    // Ideally: read delta and parse fragment
                     *last_size = new_size;
                     
-                    // Déclencher un rechargement comme si on cliquait sur Open, 
-                    // mais sans dialogue et en arrière-plan
+                    // Trigger a reload as if Open was clicked, 
+                    // but without dialog and in background
                     let me = self.clone();
-                    // On réutilise la logique de chargement existante mais adaptée
-                    // Pour simplifier ici, on simule un clic Open si c'était possible sans dialog,
-                    // mais comme on_btn_open_clicked ouvre un dialog, on doit extraire la logique.
+                    // Reuse existing loading logic but adapted
+                    // Simplified: simulate Open click if possible without dialog,
+                    // but since on_btn_open_clicked opens a dialog, we extract the logic.
                     
-                    // On va appeler directement la logique de chargement dans un thread
-                    // Attention: il faut gérer le flag is_busy
+                    // Call loading logic directly in a thread
+                    // Note: handle is_busy flag
                     if !me.is_busy.load(Ordering::SeqCst) {
                         let _ = me.status_bar.parts().get(1).set_text("File changed, reloading...");
                         
                         thread::spawn(move || {
-                            // 1. Lancer le garde-fou busy
+                            // 1. Start busy guard
                             let busy = BusyGuard::new(me.is_busy.clone());
                             
-                            // 2. FORCER LE CURSEUR IMMÉDIATEMENT
+                            // 2. FORCE CURSOR IMMEDIATELY
                             let hwnd_bg_msg = me.wnd.hwnd();
                             unsafe {
                                 let _ = hwnd_bg_msg.SendMessage(msg::WndMsg {
@@ -756,8 +788,7 @@ impl MyWindow {
                                 });
                             }
 
-                            // Parser tout le fichier
-                            // Parser tout le fichier
+                            // Parse entire file
                             let hwnd_bg = unsafe { winsafe::HWND::from_ptr(me.wnd.hwnd().ptr()) };
                             match parse_full_logic(&path, Some(hwnd_bg)) { 
                                 Ok((reqs, raw)) => {
@@ -770,7 +801,7 @@ impl MyWindow {
                                     
                                     drop(busy); // Libère le flag is_busy
 
-                                    // 4. FORCER LE RETOUR À LA FLÈCHE
+                                    // 4. FORCE ARROW RETURN
                                     unsafe {
                                         let _ = hwnd_bg_msg.SendMessage(msg::WndMsg {
                                             msg_id: WM_FORCE_NORMAL,
@@ -779,7 +810,7 @@ impl MyWindow {
                                         });
                                     }
 
-                                    // Notifier l'UI que c'est fini
+                                    // Notify UI that it's done
                                     let hwnd = me.wnd.hwnd();
                                     unsafe {
                                         let _ = hwnd.PostMessage(msg::WndMsg {
@@ -858,11 +889,11 @@ impl MyWindow {
 
 
     fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
-        // ... (Identique à l'original, mais utilise trigger_async_filter à la fin si besoin)
-        // Pour faire court, j'omet la duplication, l'idée est là :
+        // ... (Same as original, but uses trigger_async_filter at end if needed)
+        // Briefly, omitting duplication, the idea is:
         // 1. File Dialog
         // 2. Thread Spawn (load) -> Apply Filter Logic -> Post WM_LOAD_DONE
-        // Note: Le chargement de fichier reste synchrone dans le thread de fond, c'est correct.
+        // Note: File loading remains synchronous in the background thread, which is fine.
         
         let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
             &co::CLSID::FileOpenDialog, None::<&winsafe::IUnknown>, co::CLSCTX::INPROC_SERVER,
@@ -875,7 +906,7 @@ impl MyWindow {
             let path = result.GetDisplayName(co::SIGDN::FILESYSPATH)?;
 
             // --- WATCHER SETUP ---
-            // On désactive le watcher précédent
+            // Deactivate the previous watcher
             *self.watcher.lock().unwrap() = None;
             
             if !self.cb_append.is_checked() {
@@ -932,10 +963,10 @@ impl MyWindow {
             let sort_desc_val = *self.sort_desc.read().expect("Lock failed");
 
             thread::spawn(move || {
-                // 1. Lancer le garde-fou busy
+                // 1. Start busy guard
                 let busy = BusyGuard::new(is_busy_bg);
                 
-                // 2. FORCER LE CURSEUR IMMÉDIATEMENT
+                // 2. FORCE CURSOR IMMEDIATELY
                 let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                 unsafe {
                     let _ = hwnd_bg.SendMessage(msg::WndMsg {
@@ -958,9 +989,9 @@ impl MyWindow {
                         }
                         apply_filter_logic(&all_items_bg, &filt_ids_bg, &query, show_err_val, sort_col_val, sort_desc_val);
                         
-                        drop(busy); // Libère le flag is_busy
+                        drop(busy); // Release is_busy flag
 
-                        // 4. FORCER LE RETOUR À LA FLÈCHE
+                        // 4. FORCE ARROW RETURN
                         unsafe {
                             let _ = hwnd_bg.SendMessage(msg::WndMsg {
                                 msg_id: WM_FORCE_NORMAL,
@@ -969,11 +1000,11 @@ impl MyWindow {
                             });
                         }
 
-                        // 5. Notifier l'UI
+                        // 5. Notify UI
                         unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
                     }
                     Err(_) => {
-                        // Gestion des erreurs : Même logique
+                        // Error handling: same logic
                         drop(busy);
                         unsafe {
                             let _ = hwnd_bg.SendMessage(msg::WndMsg {
@@ -990,9 +1021,9 @@ impl MyWindow {
         Ok(())
     }
 
-    // ... (on_btn_open_folder, on_btn_about, on_lst_context_menu, etc. restent similaires)
-    // J'ai raccourci pour la lisibilité, la logique principale est dans les optimisations ci-dessus.
-    // Assurez-vous de convertir les Mutex::lock en RwLock::read ou write dans les autres fonctions.
+    // ... (on_btn_open_folder, on_btn_about, on_lst_context_menu, etc. remain similar)
+    // Shortened for readability, main logic is in the optimizations above.
+    // Make sure to convert Mutex::lock into RwLock::read or write in other functions.
     
     fn on_btn_open_folder_clicked(&self) -> winsafe::AnyResult<()> {
         let file_dialog = winsafe::CoCreateInstance::<winsafe::IFileOpenDialog>(
@@ -1075,9 +1106,9 @@ impl MyWindow {
     
                     apply_filter_logic(&all_items_bg, &filt_ids_bg, &query, show_err_val, sort_col_val, sort_desc_val);
                     
-                    drop(busy); // Libère le flag is_busy
+                    drop(busy); // Release is_busy flag
 
-                    // 4. FORCER LE RETOUR À LA FLÈCHE
+                    // 4. FORCE ARROW RETURN
                     unsafe {
                         let _ = hwnd_bg.SendMessage(msg::WndMsg {
                             msg_id: WM_FORCE_NORMAL,
@@ -1086,10 +1117,10 @@ impl MyWindow {
                         });
                     }
 
-                    // 5. Notifier l'UI
+                    // 5. Notify UI
                     unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
                 } else {
-                     drop(busy); // Libère le flag is_busy
+                     drop(busy); // Release is_busy flag
 
                      unsafe {
                         let _ = hwnd_bg.SendMessage(msg::WndMsg {
@@ -1138,16 +1169,16 @@ impl MyWindow {
             LogColumn::Session => &req.session_id,
         };
 
-        // FIX FINAL : Utiliser UnsafeCell pour éviter les problèmes de borrow lifetime
-        // Le buffer thread_local reste en vie, et on y accède via unsafe
+        // FINAL FIX: Use UnsafeCell to avoid borrow lifetime issues
+        // The thread_local buffer stays alive, and we access it via unsafe
         use std::cell::UnsafeCell;
         thread_local! {
             static WSTR_BUF: UnsafeCell<winsafe::WString> = UnsafeCell::new(winsafe::WString::new());
         }
         
         WSTR_BUF.with(|cell| {
-            // SAFETY: Nous sommes dans un thread_local, donc un seul thread y accède
-            // Windows ne modifie pas le buffer, il le lit seulement
+            // SAFETY: We are in a thread_local, so only one thread accesses it
+            // Windows does not modify the buffer, it only reads it
             unsafe {
                 let ws_ptr = cell.get();
                 *ws_ptr = winsafe::WString::from_str(text);
@@ -1161,11 +1192,11 @@ impl MyWindow {
         Ok(())
     }
     
-    // ... (Autres méthodes UI: on_lst_context_menu, show_column_context_menu, toggle_column_visibility, 
+    // ... (Other UI methods: on_lst_context_menu, show_column_context_menu, toggle_column_visibility, 
     //      on_lst_lvn_column_click, on_btn_rejects_clicked, on_lst_nm_custom_draw, run, refresh_columns, update_headers)
-    //      La structure est identique, seuls les appels à .lock() changent pour .read() ou .write().
+    //      The structure is identical, only .lock() calls change to .read() or .write().
     
-    // Exemple de modification pour on_lst_lvn_column_click
+    // Example modification for on_lst_lvn_column_click
     fn on_lst_lvn_column_click(&self, p: &winsafe::NMLISTVIEW) -> winsafe::AnyResult<()> {
         let mut sort_col_g = self.sort_col.write().expect("Lock failed");
         let mut sort_desc_g = self.sort_desc.write().expect("Lock failed");
@@ -1185,11 +1216,11 @@ impl MyWindow {
         drop(sort_col_g);
         drop(sort_desc_g);
         
-        // Relance le filtre asynchrone
+        // Trigger async filter again
         self.trigger_async_filter();
         
         self.update_headers();
-        // Note: on ne fait plus InvalidateRect ici, le WM_FILTER_DONE s'en chargera
+        // Note: we no longer do InvalidateRect here, WM_FILTER_DONE will handle it
         Ok(())
     }
     
@@ -1206,9 +1237,9 @@ impl MyWindow {
         Ok(())
     }
 
-    // Adaptation des autres méthodes omises pour brièveté...
+    // Adaptation of other methods omitted for brevity...
     fn on_lst_context_menu(&self, pt_screen: winsafe::POINT, _target_hwnd: winsafe::HWND) -> winsafe::AnyResult<()> {
-        // Identique à l'original, mais attention aux locks (read pour visible_cols)
+        // Identical to original, but watch out for locks (read for visible_cols)
         let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}).unwrap_or(winsafe::HWND::NULL) };
         let rc_header = h_header.GetWindowRect().unwrap_or_default();
         if pt_screen.x >= rc_header.left && pt_screen.x <= rc_header.right
@@ -1294,9 +1325,16 @@ impl MyWindow {
             }
             *visible = new_visible;
         }
+        
+        // Save to config immediately for persistence
+        if let Ok(mut config) = self.config.write() {
+            config.visible_columns.clone_from(&visible);
+            let _ = config.save();
+        }
+
         drop(visible);
         self.refresh_columns();
-        self.trigger_async_filter(); // Refresh needed if columns affect sorting/filtering context (optional)
+        self.trigger_async_filter();
     }
 
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
@@ -1327,7 +1365,7 @@ impl MyWindow {
 
                     let bg = if is_selected {
                         if clr.0 == 209 || clr.0 == 165 { // Green log
-                             winsafe::COLORREF::from_rgb(110, 231, 183) // Emerald 300 (Vert Moyen)
+                             winsafe::COLORREF::from_rgb(110, 231, 183) // Emerald 300 (Medium Green)
                         } else { // Red log
                              winsafe::COLORREF::from_rgb(254, 205, 211) // Rose 200
                         }
@@ -1338,7 +1376,7 @@ impl MyWindow {
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg);
-                        std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(0, 0, 0)); // Texte Noir
+                        std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(0, 0, 0)); // Black Text
                     }
                     co::CDRF::NEWFONT
                 } else {
@@ -1376,7 +1414,7 @@ impl MyWindow {
     }
     
     fn update_headers(&self) {
-        // 1. Récupérer l'handle du contrôle Header (la barre des titres)
+        // 1. Get handle of the Header control (title bar)
         let h_header = unsafe { self.lst_logs.hwnd()
             .SendMessage(msg::lvm::GetHeader {})
             .expect("Failed to get header") };
@@ -1391,16 +1429,16 @@ impl MyWindow {
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
 
         for (i, &col) in visible.iter().enumerate() {
-            // 2. Préparer la structure HDITEM
+            // 2. Prepare HDITEM structure
             let mut hdi = winsafe::HDITEM::default();
             
-            // On veut changer le Format (pour la flèche) et le Texte
+            // We want to change the Format (for the arrow) and the Text
             hdi.mask = co::HDI::FORMAT | co::HDI::TEXT;
             
-            // Définir le format de base (Alignement à gauche)
+            // Define base format (Left alignment)
             hdi.fmt = co::HDF::LEFT | co::HDF::STRING; 
 
-            // 3. Ajouter la flèche NATIVE si c'est la colonne triée
+            // 3. Add NATIVE arrow if it's the sorted column
             if col == sort_col {
                 if sort_desc {
                     hdi.fmt |= co::HDF::SORTDOWN;
@@ -1409,13 +1447,13 @@ impl MyWindow {
                 }
             }
             
-            // 4. Définir le texte (SANS la flèche cette fois !)
+            // 4. Define text (WITHOUT the arrow this time!)
             let text = clean_tr(&loader.get(col.ftl_key()));
             let mut wtext = winsafe::WString::from_str(&text);
             hdi.set_pszText(Some(&mut wtext));
 
-            // 5. Envoyer le message directement au Header
-            // C'est plus robuste que LVM_SETCOLUMN pour les flags de tri
+            // 5. Send message directly to Header
+            // This is more robust than LVM_SETCOLUMN for sort flags
             unsafe {
                 h_header.SendMessage(msg::hdm::SetItem {
                     index: i as u32,
@@ -1436,9 +1474,9 @@ fn apply_filter_logic(
     sort_col: LogColumn,
     sort_descending: bool,
 ) {
-    let q = query.trim().to_ascii_lowercase(); // Optimisation: lowercase la query une seule fois
+    let q = query.trim().to_ascii_lowercase(); // Optimization: lowercase the query once
     
-    // 1. Lecture des données (Read Lock)
+    // 1. Data reading (Read Lock)
     let items = all_items.read().expect("Lock failed");
         
     let mut failed_session_ids = HashSet::new();
@@ -1450,7 +1488,7 @@ fn apply_filter_logic(
         }
     }
 
-    // 2. Filtrage (Collection locale)
+    // 2. Filtering (Local collection)
     let mut ids: Vec<usize> = (0..items.len())
         .filter(|&i| {
             let item = &items[i];
@@ -1464,12 +1502,12 @@ fn apply_filter_logic(
             }
             if q.is_empty() { return true; }
             
-            // Optimisation: on passe la chaîne déjà en minuscule
+            // Optimization: pass string already in lowercase
             item.matches(&q)
         })
         .collect();
 
-    // 3. Tri (Sur la collection locale)
+    // 3. Sorting (On the local collection)
     ids.sort_unstable_by(|&a_idx, &b_idx| {
         let a = &items[a_idx];
         let b = &items[b_idx];
@@ -1495,14 +1533,14 @@ fn apply_filter_logic(
     // Release read lock before write lock
     drop(items);
 
-    // 4. Écriture du résultat (Write Lock - brève)
+    // 4. Result writing (Write Lock - brief)
     let mut filt_guard = filtered_ids.write().expect("Lock failed");
     *filt_guard = ids;
 }
 
 
-// ... (parse_full_logic, process_group, map_packet_type, map_reason, clean_tr, main restent identiques)
-// Je les inclus pour que le code soit complet.
+// ... (parse_full_logic, process_group, map_packet_type, map_reason, clean_tr, main remain the same)
+// I include them so the code is complete.
 
 fn parse_full_logic(path: &str, hwnd: Option<winsafe::HWND>) -> anyhow::Result<(Vec<RadiusRequest>, usize)> {
     let content = fs::read_to_string(path)?;
@@ -1516,7 +1554,7 @@ fn parse_full_logic(path: &str, hwnd: Option<winsafe::HWND>) -> anyhow::Result<(
     let mut event_blobs = Vec::new();
     let mut last_progress = 0u8;
 
-    // --- PHASE 1 : EXTRACTION SÉQUENTIELLE (0% à 50%) ---
+    // --- PHASE 1: SEQUENTIAL EXTRACTION (0% to 50%) ---
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(ref e)) if e.name().as_ref() == b"Event" => {
@@ -1551,7 +1589,7 @@ fn parse_full_logic(path: &str, hwnd: Option<winsafe::HWND>) -> anyhow::Result<(
         return Ok((Vec::new(), 0));
     }
 
-    // --- PHASE 2 : PARALLÉLISATION AVEC RAYON (50% à 100%) ---
+    // --- PHASE 2: PARALLELIZATION WITH RAYON (50% to 100%) ---
     let processed_count = Arc::new(AtomicUsize::new(0));
     let total_blobs = raw_event_count;
     let count_clone = processed_count.clone();
@@ -1631,8 +1669,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
             if let Some(val) = &event.class { req.class_id.clone_from(val); }
             req.req_type = map_packet_type(p_type);
             
-            // FIX : On sort la chaîne "Unknown" de la boucle ou on la hardcode
-            // Éviter d'accéder à LANGUAGE_LOADER dans du code parallèle (Rayon)
+            // FIX: We take the "Unknown" string out of the loop or hardcode it
+            // Avoid accessing LANGUAGE_LOADER in parallel code (Rayon)
             if let Some(user) = &event.sam_account { req.user.clone_from(user); } 
             else if let Some(user) = &event.user_name { req.user.clone_from(user); } 
             else { 
@@ -1668,27 +1706,27 @@ fn map_packet_type(code: &str) -> String {
 }
 
 
-// Cache statique pour la carte des raisons
+// Static cache for reason map
 static REASON_MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
 
 fn get_reason_map() -> &'static HashMap<String, String> {
     REASON_MAP.get_or_init(|| {
-        // `include_str!` embed le fichier JSON à la compilation.
-        // Assurez-vous que le fichier reason_codes.json est bien à côté de main.rs
+        // `include_str!` embeds the JSON file at compile time.
+        // Ensure the reason_codes.json file is next to main.rs
         let json_content = include_str!("reason_codes.json");
         
         match serde_json::from_str(json_content) {
             Ok(map) => map,
             Err(e) => {
-                eprintln!("Erreur critique lors du chargement de reason_codes.json : {}", e);
-                HashMap::new() // Retourne une map vide en cas d'erreur pour éviter le crash
+                eprintln!("Critical error loading reason_codes.json: {}", e);
+                HashMap::new() // Returns an empty map on error to avoid crash
             }
         }
     })
 }
 
 fn map_reason(code: &str) -> String {
-    // Recherche directe dans la HashMap (O(1))
+    // Direct search in the HashMap (O(1))
     get_reason_map()
         .get(code)
         .cloned()
