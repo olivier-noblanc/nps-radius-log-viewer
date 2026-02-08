@@ -403,12 +403,7 @@ impl MyWindow {
             let _ = me.status_bar.parts().get(0).set_text("");
             me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
             
-            // Reset Cursor via BusyGuard Drop mechanism handled in thread, 
-            // mais on s'assure ici que c'est fait
 
-            if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-            }
             Ok(0)
         });
 
@@ -418,9 +413,7 @@ impl MyWindow {
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
             let _ = me.status_bar.parts().get(1).set_text(&loader.get("ui-status-error"));
             
-            if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                 unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-            }
+
             me.is_busy.store(false, Ordering::SeqCst);
             me.trigger_async_filter(); // Initial filter
             Ok(0)
@@ -479,17 +472,7 @@ impl MyWindow {
             Ok(0)
         });
 
-        // --- Gestion Globale du Curseur (Occupé) ---
-        let me = self.clone();
-        self.wnd.on().wm_set_cursor(move |p| {
-            if me.is_busy.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
-                if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) } {
-                    unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                    return Ok(true); 
-                }
-            }
-            Ok(false)
-        });
+
 
         // --- Gestion des Raccourcis Clavier ---
         let me = self.clone();
@@ -517,6 +500,18 @@ impl MyWindow {
     fn on_events(&self) {
         self.btn_open.on().bn_clicked({ let me = self.clone(); move || me.on_btn_open_clicked() });
         self.btn_open_folder.on().bn_clicked({ let me = self.clone(); move || me.on_btn_open_folder_clicked() });
+        
+        // --- ListView Subclassing for Wait Cursor ---
+        let me = self.clone();
+        self.lst_logs.on_subclass().wm_set_cursor(move |p| {
+            if me.is_busy.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
+                if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) } {
+                    unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        });
         
         self.wnd.on().wm_context_menu({ let me = self.clone(); move |p| {
             let h_header = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}).unwrap_or(winsafe::HWND::NULL) };
@@ -733,11 +728,6 @@ impl MyWindow {
                         let _ = me.status_bar.parts().get(1).set_text("File changed, reloading...");
                         
                         thread::spawn(move || {
-                            // Force WAIT cursor immediately
-                            if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) } {
-                                unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                            }
-
                             let busy = BusyGuard::new(me.is_busy.clone());
                             
                             // Parser tout le fichier
@@ -753,10 +743,6 @@ impl MyWindow {
                                     }
                                     
                                     drop(busy); // Drop busy guard
-                                    // Force ARROW cursor
-                                    if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                                        unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                                    }
 
                                     // Notifier l'UI que c'est fini
                                     let hwnd = me.wnd.hwnd();
@@ -776,10 +762,6 @@ impl MyWindow {
                                     eprintln!("Reload error: {:?}", e);
                                     
                                     drop(busy); // Drop busy guard
-                                    // Force ARROW cursor
-                                    if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                                        unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                                    }
 
                                     let hwnd = me.wnd.hwnd();
                                     unsafe {
@@ -907,11 +889,6 @@ impl MyWindow {
             let sort_desc_val = *self.sort_desc.read().expect("Lock failed");
 
             thread::spawn(move || {
-                // Force WAIT cursor immediately
-                if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) } {
-                    unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                }
-
                 let busy = BusyGuard::new(is_busy_bg);
                 let hwnd_progress = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                 match parse_full_logic(&path, Some(hwnd_progress)) {
@@ -926,21 +903,13 @@ impl MyWindow {
                         }
                         apply_filter_logic(&all_items_bg, &filt_ids_bg, &query, show_err_val, sort_col_val, sort_desc_val);
                         
-                        drop(busy); // Drop busy guard to allow cursor change
-                        // Force ARROW cursor
-                        if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                            unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                        }
+                        drop(busy); // Drop busy guard
 
                         let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                         unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
                     }
                     Err(_) => {
-                        drop(busy); // Drop busy guard to allow cursor change
-                        // Force ARROW cursor
-                        if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                            unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                        }
+                        drop(busy); // Drop busy guard
 
                         let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                         unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_ERROR, wparam: 0, lparam: 0 }); }
@@ -985,11 +954,6 @@ impl MyWindow {
             let hwnd_raw = self.wnd.hwnd().ptr() as usize;
 
             thread::spawn(move || {
-                // Force WAIT cursor immediately
-                if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) } {
-                    unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                }
-
                 let busy = BusyGuard::new(is_busy_bg);
                 
                 let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
@@ -1029,20 +993,12 @@ impl MyWindow {
     
                     apply_filter_logic(&all_items_bg, &filt_ids_bg, &query, show_err_val, sort_col_val, sort_desc_val);
                     
-                    drop(busy); // Drop busy guard to allow cursor change
-                    // Force ARROW cursor
-                    if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                        unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                    }
+                    drop(busy); // Drop busy guard
 
                     let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                     unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
                 } else {
                      drop(busy); // Drop busy guard
-                     // Force ARROW cursor
-                     if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
-                        unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
-                     }
 
                      let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                      unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
