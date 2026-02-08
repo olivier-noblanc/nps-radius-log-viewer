@@ -303,6 +303,7 @@ impl LogColumn {
 struct AboutWindow {
     wnd:      gui::WindowModal,
     stc_icon: gui::Label,
+    #[allow(dead_code)]
     lbl_text: gui::Label,
     btn_ok:   gui::Button,
 }
