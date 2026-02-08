@@ -1303,38 +1303,47 @@ impl MyWindow {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
             co::CDDS::ITEMPREPAINT => {
-                // SELECTION DETECTION
+                // 1. Check if Selected (Mouse) OR Focused (Keyboard arrows)
                 let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
+                let is_focused = p.mcd.uItemState.has(co::CDIS::FOCUS);
 
-                // 1. Get specific log color (Green/Red) if exists
                 let item_color = {
                     let items = self.all_items.read().expect("Lock failed");
                     let ids = self.filtered_ids.read().expect("Lock failed");
                     ids.get(p.mcd.dwItemSpec).and_then(|&idx| items.get(idx).and_then(|it| it.bg_color))
                 };
                 
-                // 2. Compute final colors
                 if let Some(clr) = item_color {
-                    // Basic masking to help with Visibility
-                    if is_selected {
+                    // Consider the line as "active" if it's selected OR has focus
+                    let is_active = is_selected || is_focused;
+
+                    // 2. If the line is active (keyboard or mouse), use dark color
+                    if is_active {
                         let p_ptr = std::ptr::from_ref(p).cast_mut();
                         unsafe {
+                            // Mask standard Windows selection to apply our dark green
                             let mut state = (*p_ptr).mcd.uItemState;
                             state &= !co::CDIS::SELECTED; // Mask selection
                             std::ptr::write_volatile(&mut (*p_ptr).mcd.uItemState, state);
                         }
+
+                        // Dark Green or Dark Red
+                        let bg = if clr.0 == 209 || clr.0 == 165 { 
+                            winsafe::COLORREF::from_rgb(50, 180, 120) // Dark green
+                        } else { 
+                            winsafe::COLORREF::from_rgb(220, 100, 100) // Dark red
+                        };
+                        
+                        let p_ptr = std::ptr::from_ref(p).cast_mut();
+                        unsafe {
+                            std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg);
+                            std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(255, 255, 255)); // White Text
+                        }
+                        return co::CDRF::NEWFONT;
                     }
 
-                    let bg = if is_selected {
-                        if clr.0 == 209 || clr.0 == 165 { // Green log
-                             winsafe::COLORREF::from_rgb(110, 231, 183) // Emerald 300 (Medium Green)
-                        } else { // Red log
-                             winsafe::COLORREF::from_rgb(254, 205, 211) // Rose 200
-                        }
-                    } else {
-                        winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2)
-                    };
-
+                    // 3. Otherwise (inactive but colored line), use normal color (Light Green + Black)
+                    let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg);
@@ -1342,7 +1351,7 @@ impl MyWindow {
                     }
                     co::CDRF::NEWFONT
                 } else {
-                    // --- CASE B: STANDARD LINE ---
+                    // Standard white line
                     co::CDRF::DODEFAULT
                 }
             },
