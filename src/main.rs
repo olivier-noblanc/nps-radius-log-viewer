@@ -1336,23 +1336,22 @@ impl MyWindow {
                 };
                 
                 if let Some(clr) = item_color {
-                    // Si la ligne a une couleur personnalisée (Vert ou Rouge)
-                    
-                    // Déterminer la couleur de Fond et de Texte
-                    // NOTE: Pour du Vert (0, 128, 0) ou Rouge (255, 0, 0), le texte DOIT être blanc pour être lisible.
+                    // Si la ligne a une couleur personnalisée (Modern Green ou Modern Red)
                     
                     let (bg, text_col) = if is_active {
-                        // --- SÉLECTIONNÉ (Encore plus sombre) ---
-                        let bg_color = if clr.0 == 0 { 
-                             winsafe::COLORREF::from_rgb(0, 80, 0) // Vert très sombre
+                        // --- SÉLECTIONNÉ (Variantes assombries pour le contraste) ---
+                        // Si le fond est VERT (25, 135, 84)
+                        // Si le fond est ROUGE (220, 53, 69)
+                        let bg_color = if clr.0 == 25 { 
+                             winsafe::COLORREF::from_rgb(20, 108, 67) // Vert Sombre (Bootstrap active)
                         } else { 
-                             winsafe::COLORREF::from_rgb(180, 0, 0) // Rouge brique sombre
+                             winsafe::COLORREF::from_rgb(176, 42, 55) // Rouge Sombre (Bootstrap active)
                         };
                         (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Texte Blanc
                     } else {
-                        // --- NORMAL (Couleurs C# Standard) ---
+                        // --- NORMAL (Couleurs Modernes Vibrantes) ---
                         let bg_color = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Texte Blanc (Important sur fond foncé !)
+                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Texte Blanc
                     };
 
                     // Application des couleurs
@@ -1670,8 +1669,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
                  req.reason = map_reason(code);
             }
             match p_type {
-                "2" => req.bg_color = Some((0, 128, 0)),   // C# Color.Green (Dark Green)
-                "3" => req.bg_color = Some((255, 0, 0)),   // C# Color.Red
+                "2" => req.bg_color = Some((25, 135, 84)),   // Modern Success (Bootstrap Green)
+                "3" => req.bg_color = Some((220, 53, 69)),   // Modern Danger (Bootstrap Red)
                 _ => {},
             }
         }
