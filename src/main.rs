@@ -50,6 +50,32 @@ impl SafeHWND {
     fn h(&self) -> winsafe::HWND {
         unsafe { winsafe::HWND::from_ptr(self.0 as *mut _) }
     }
+    
+    /// Send a custom WM_USER message synchronously
+    /// Encapsulates the unsafe block for cleaner thread code
+    fn send(&self, msg_id: co::WM, wparam: usize, lparam: isize) {
+        let h = self.h();
+        unsafe {
+            let _ = h.SendMessage(msg::WndMsg {
+                msg_id,
+                wparam,
+                lparam,
+            });
+        }
+    }
+    
+    /// Post a custom WM_USER message asynchronously
+    /// Encapsulates the unsafe block for cleaner thread code
+    fn post(&self, msg_id: co::WM, wparam: usize, lparam: isize) {
+        let h = self.h();
+        unsafe {
+            let _ = h.PostMessage(msg::WndMsg {
+                msg_id,
+                wparam,
+                lparam,
+            });
+        }
+    }
 }
 const IDT_SEARCH_TIMER: usize = 100; // ID for search timer
 
@@ -355,14 +381,12 @@ impl MyWindow {
                 sz.cx = config.window_width;
                 sz.cy = config.window_height;
 
-                unsafe {
-                    me.wnd.hwnd().SetWindowPos(
-                        winsafe::HwndPlace::Place(co::HWND_PLACE::NOTOPMOST),
-                        pt,
-                        sz,
-                        co::SWP::NOZORDER,
-                    ).ok();
-                }
+                me.wnd.hwnd().SetWindowPos(
+                    winsafe::HwndPlace::Place(co::HWND_PLACE::NOTOPMOST),
+                    pt,
+                    sz,
+                    co::SWP::NOZORDER,
+                ).ok();
             }
             Ok(0)
         });
@@ -783,16 +807,9 @@ impl MyWindow {
                             thread::spawn(move || {
                                 // 1. Start busy guard
                                 let busy = BusyGuard::new(is_busy_bg);
-                                let h = safe_hwnd.h();
                                 
                                 // 2. FORCE CURSOR IMMEDIATELY
-                                unsafe {
-                                    let _ = h.SendMessage(msg::WndMsg {
-                                        msg_id: WM_FORCE_WAIT,
-                                        wparam: 0,
-                                        lparam: 0,
-                                    });
-                                }
+                                safe_hwnd.send(WM_FORCE_WAIT, 0, 0);
 
                                 // Parse entire file
                                 match parse_full_logic(&path_bg, Some(safe_hwnd)) { 
@@ -807,42 +824,18 @@ impl MyWindow {
                                         drop(busy); // Release is_busy flag
 
                                         // 4. FORCE ARROW RETURN
-                                        unsafe {
-                                            let _ = h.SendMessage(msg::WndMsg {
-                                                msg_id: WM_FORCE_NORMAL,
-                                                wparam: 0,
-                                                lparam: 0,
-                                            });
-                                        }
+                                        safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
 
                                         // Notify UI that it's done
-                                        unsafe {
-                                            let _ = h.PostMessage(msg::WndMsg {
-                                                msg_id: WM_LOAD_DONE,
-                                                wparam: 0,
-                                                lparam: 0,
-                                            });
-                                        }
+                                        safe_hwnd.post(WM_LOAD_DONE, 0, 0);
                                     }
                                     Err(e) => {
                                         eprintln!("Reload error: {:?}", e);
                                         drop(busy); 
 
-                                        unsafe {
-                                            let _ = h.SendMessage(msg::WndMsg {
-                                                msg_id: WM_FORCE_NORMAL,
-                                                wparam: 0,
-                                                lparam: 0,
-                                            });
-                                        }
+                                        safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
 
-                                        unsafe {
-                                            let _ = h.PostMessage(msg::WndMsg {
-                                                msg_id: WM_LOAD_ERROR,
-                                                wparam: 0,
-                                                lparam: 0,
-                                            });
-                                        }
+                                        safe_hwnd.post(WM_LOAD_ERROR, 0, 0);
                                     }
                                 }
                             });
@@ -964,16 +957,9 @@ impl MyWindow {
             thread::spawn(move || {
                 // 1. Start busy guard
                 let busy = BusyGuard::new(is_busy_bg);
-                let h = safe_hwnd.h();
                 
                 // 2. FORCE CURSOR IMMEDIATELY
-                unsafe {
-                    let _ = h.SendMessage(msg::WndMsg {
-                        msg_id: WM_FORCE_WAIT,
-                        wparam: 0,
-                        lparam: 0,
-                    });
-                }
+                safe_hwnd.send(WM_FORCE_WAIT, 0, 0);
 
                 match parse_full_logic(&path_bg, Some(safe_hwnd)) {
                     Ok((items, raw_total)) => {
@@ -990,27 +976,15 @@ impl MyWindow {
                         drop(busy); // Release is_busy flag
 
                         // 4. FORCE ARROW RETURN
-                        unsafe {
-                            let _ = h.SendMessage(msg::WndMsg {
-                                msg_id: WM_FORCE_NORMAL,
-                                wparam: 0,
-                                lparam: 0,
-                            });
-                        }
+                        safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
 
                         // 5. Notify UI
-                        unsafe { let _ = h.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
+                        safe_hwnd.post(WM_LOAD_DONE, 0, 0);
                     }
                     Err(_) => {
                         drop(busy);
-                        unsafe {
-                            let _ = h.SendMessage(msg::WndMsg {
-                                msg_id: WM_FORCE_NORMAL,
-                                wparam: 0,
-                                lparam: 0,
-                            });
-                        }
-                        unsafe { let _ = h.PostMessage(msg::WndMsg { msg_id: WM_LOAD_ERROR, wparam: 0, lparam: 0 }); }
+                        safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
+                        safe_hwnd.post(WM_LOAD_ERROR, 0, 0);
                     }
                 }
             });
@@ -1054,16 +1028,9 @@ impl MyWindow {
             thread::spawn(move || {
                 // 1. Start busy guard
                 let busy = BusyGuard::new(is_busy_bg);
-                let h = safe_hwnd.h();
                 
                 // 2. FORCE CURSOR IMMEDIATELY
-                unsafe {
-                    let _ = h.SendMessage(msg::WndMsg {
-                        msg_id: WM_FORCE_WAIT,
-                        wparam: 0,
-                        lparam: 0,
-                    });
-                }
+                safe_hwnd.send(WM_FORCE_WAIT, 0, 0);
 
                 let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
                 if let Ok(entries) = fs::read_dir(&folder_path_str) {
@@ -1105,28 +1072,16 @@ impl MyWindow {
                     drop(busy); // Release is_busy flag
 
                     // 4. FORCE ARROW RETURN
-                    unsafe {
-                        let _ = h.SendMessage(msg::WndMsg {
-                            msg_id: WM_FORCE_NORMAL,
-                            wparam: 0,
-                            lparam: 0,
-                        });
-                    }
+                    safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
 
                     // 5. Notify UI
-                    unsafe { let _ = h.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
+                    safe_hwnd.post(WM_LOAD_DONE, 0, 0);
                 } else {
                      drop(busy); // Release is_busy flag
 
-                     unsafe {
-                        let _ = h.SendMessage(msg::WndMsg {
-                            msg_id: WM_FORCE_NORMAL,
-                            wparam: 0,
-                            lparam: 0,
-                        });
-                    }
+                     safe_hwnd.send(WM_FORCE_NORMAL, 0, 0);
 
-                     unsafe { let _ = h.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
+                     safe_hwnd.post(WM_LOAD_DONE, 0, 0);
                 }
             });
         }
@@ -1236,7 +1191,11 @@ impl MyWindow {
     // Adaptation of other methods omitted for brevity...
     fn on_lst_context_menu(&self, pt_screen: winsafe::POINT, _target_hwnd: winsafe::HWND) -> winsafe::AnyResult<()> {
         // Identical to original, but watch out for locks (read for visible_cols)
-        let h_header = unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::GetHeader {}).unwrap_or(winsafe::HWND::NULL) };
+        let h_header = if let Some(header) = self.lst_logs.header() {
+            unsafe { winsafe::HWND::from_ptr(header.hwnd().ptr()) }
+        } else {
+            winsafe::HWND::NULL
+        };
         let rc_header = h_header.GetWindowRect().unwrap_or_default();
         if pt_screen.x >= rc_header.left && pt_screen.x <= rc_header.right
             && pt_screen.y >= rc_header.top && pt_screen.y <= rc_header.bottom {
@@ -1245,10 +1204,15 @@ impl MyWindow {
         }
 
         let pt_client = self.lst_logs.hwnd().ScreenToClient(pt_screen).expect("ScreenToClient failed");
-        let mut lvhti = winsafe::LVHITTESTINFO { pt: pt_client, ..Default::default() };
-
-        if unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::HitTest { info: &mut lvhti }).is_some() }
-            && lvhti.iItem != -1 {
+        
+        // Use hit_test() to get the item, but we still need LVHITTESTINFO for iSubItem
+        if let Some(hit_item) = self.lst_logs.items().hit_test(pt_client) {
+            let item_index = hit_item.index();
+            
+            // Get subitem info manually since winsafe doesn't expose it
+            let mut lvhti = winsafe::LVHITTESTINFO { pt: pt_client, ..Default::default() };
+            unsafe { self.lst_logs.hwnd().SendMessage(msg::lvm::HitTest { info: &mut lvhti }); }
+            let subitem_index = lvhti.iSubItem;
                 let h_menu = winsafe::HMENU::CreatePopupMenu()?;
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
                 h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1001), winsafe::BmpPtrStr::from_str(&clean_tr(&loader.get("ui-menu-copy-cell"))))?;
@@ -1258,11 +1222,11 @@ impl MyWindow {
                 if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, pt_screen, self.lst_logs.hwnd())? {
                     match cmd_id {
                         1001 => { 
-                            let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
+                            let cell_text = hit_item.text(subitem_index as _);
                             let _ = clipboard_win::set_clipboard_string(&cell_text); 
                         },
                         1002 => {
-                            let cell_text = self.lst_logs.items().get(lvhti.iItem as _).text(lvhti.iSubItem as _);
+                            let cell_text = hit_item.text(subitem_index as _);
                             let _ = self.txt_search.hwnd().SetWindowText(&cell_text);
                             // Force search refresh
                              let _ = self.wnd.hwnd().SetTimer(IDT_SEARCH_TIMER, 100, None); 
@@ -1270,7 +1234,7 @@ impl MyWindow {
                         1003 => {
                             let items = self.all_items.read().expect("Lock failed");
                             let ids = self.filtered_ids.read().expect("Lock failed");
-                            if let Some(&idx) = ids.get(lvhti.iItem as usize) {
+                            if let Some(&idx) = ids.get(item_index as usize) {
                                 let tsv = items[idx].to_tsv();
                                 let _ = clipboard_win::set_clipboard_string(&tsv);
                             }
