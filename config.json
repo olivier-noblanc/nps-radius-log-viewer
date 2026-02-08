@@ -1,6 +1,8 @@
 {
-  "window_width": 1000,
-  "window_height": 700,
+  "window_x": 424,
+  "window_y": 82,
+  "window_width": 1072,
+  "window_height": 888,
   "column_widths": [
     150,
     120,

@@ -23,6 +23,7 @@ ui-map-code = Code { $code }
 # --- About ---
 about_title = About
 about_text = RADIUS Log Browser v1.0.0 - By Olivier Noblanc
+about_shortcuts = Shortcuts: Ctrl+O (Open), Ctrl+F (Search), F5 (Refresh)
 
 col-timestamp = Timestamp
 col-type = Packet Type
