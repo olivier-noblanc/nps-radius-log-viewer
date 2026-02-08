@@ -2,15 +2,16 @@
   "window_width": 1000,
   "window_height": 700,
   "column_widths": [
-    167,
-    115,
-    139,
-    93,
-    93,
-    141,
-    191,
+    150,
+    120,
+    120,
+    110,
+    150,
     130,
-    645
+    150,
+    150,
+    350,
+    150
   ],
   "visible_columns": [
     "Timestamp",
@@ -23,5 +24,6 @@
     "ResponseType",
     "Reason",
     "Session"
-  ]
+  ],
+  "font_choice": "System"
 }

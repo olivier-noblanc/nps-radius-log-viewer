@@ -1,8 +1,12 @@
+
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::significant_drop_tightening, clippy::nursery, clippy::pedantic, clippy::iter_kv_map)]
 
 use winsafe::prelude::*;
 use winsafe::{gui, co, msg};
+use windows::Win32::UI::WindowsAndMessaging::{SetCursor as WinSetCursor, HCURSOR as WinHCURSOR};
+// Import explicites pour les curseurs pour éviter les soucis de prelude
+// use winsafe::user::funcs::LoadCursorW; 
 use quick_xml::de::from_str;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -390,22 +394,22 @@ impl MyWindow {
                     }) };
             let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
 
-            /*
+            
             // Créer le menu View avec sous-menu Font
             if let Ok(menu_bar) = winsafe::HMENU::CreateMenu() {
                 // Menu View
-                if let Ok(menu_view) = winsafe::HMENU::CreatePopupMenu() {
-                    let _ = menu_bar.AppendMenu(co::MF::POPUP, winsafe::IdMenu::Menu(menu_view), Some("&View"));
-                    
-                    // Sous-menu Font
-                    if let Ok(menu_font) = winsafe::HMENU::CreatePopupMenu() {
-                        let _ = menu_view.AppendMenu(co::MF::POPUP, winsafe::IdMenu::Menu(menu_font), Some("&Font"));
-                        
-                        // Items de font
-                        let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_SYSTEM), Some("System Default"));
-                        let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_SEGOE), Some("Segoe UI"));
-                        let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_CONSOLAS), Some("Consolas"));
-                        let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_COURIER), Some("Courier New"));
+                let menu_view = winsafe::HMENU::CreatePopupMenu()?;
+                let _ = menu_bar.AppendMenu(co::MF::POPUP, winsafe::IdMenu::Menu(&menu_view), winsafe::BmpPtrStr::from_str("&View"))?;
+                
+                // Sous-menu Font
+                let menu_font = winsafe::HMENU::CreatePopupMenu()?;
+                let _ = menu_view.AppendMenu(co::MF::POPUP, winsafe::IdMenu::Menu(&menu_font), winsafe::BmpPtrStr::from_str("&Font"))?;
+                
+                // Items Font
+                let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_SYSTEM), winsafe::BmpPtrStr::from_str("System Default"))?;
+                let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_SEGOE), winsafe::BmpPtrStr::from_str("Segoe UI"))?;
+                let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_CONSOLAS), winsafe::BmpPtrStr::from_str("Consolas"))?;
+                let _ = menu_font.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(ID_FONT_COURIER), winsafe::BmpPtrStr::from_str("Courier New"))?;
                         
                         // Cocher le choix actuel
                         let config = me.config.read().expect("Lock failed");
@@ -415,23 +419,20 @@ impl MyWindow {
                             "Courier New" => ID_FONT_COURIER,
                             _ => ID_FONT_SYSTEM,
                         };
-                        let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(id_to_check), co::MF::CHECKED);
-                    }
-                }
+                        let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(id_to_check), true);
                 
                 // Attacher le menu à la fenêtre
-                let _ = me.wnd.hwnd().SetMenu(menu_bar);
+                let _ = me.wnd.hwnd().SetMenu(&menu_bar);
             }
-            */
+            
 
-/*
             // --- FIX CRASH : Création de la police avec encodage correct (UTF-16) ---
             // On utilise une approche robuste avec fallback sur la font système
             
             let mut lf = winsafe::LOGFONT::default();
             lf.lfHeight = -12;
             lf.lfWeight = co::FW::NORMAL;
-            lf.lfCharSet = co::DEFAULT_CHARSET; // Sécurité
+            lf.lfCharSet = co::CHARSET::DEFAULT; // Sécurité
 
             // Récupérer le choix de l'utilisateur
             let config = me.config.read().expect("Lock failed");
@@ -441,14 +442,8 @@ impl MyWindow {
             let font_name = if user_choice == "System" { "Segoe UI" } else { &user_choice };
             
             // Encodage UTF-16 correct
-            let font_name_utf16: Vec<u16> = font_name.encode_utf16().chain(std::iter::once(0)).collect();
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    font_name_utf16.as_ptr(),
-                    lf.lfFaceName.as_mut_ptr(),
-                    font_name_utf16.len().min(lf.lfFaceName.len())
-                );
-            }
+            // Encodage UTF-16 correct
+            lf.set_lfFaceName(font_name);
 
             // TENTATIVE DE CRÉATION (avec Fallback)
             if let Ok(hfont_ui) = winsafe::HFONT::CreateFontIndirect(&lf) {
@@ -460,16 +455,15 @@ impl MyWindow {
                 
                 if let Some(ptr) = font_handle {
                     unsafe {
-                        let hfont = winsafe::HFONT::from_ptr(ptr);
-                        let _ = me.wnd.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.lst_logs.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.txt_search.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.btn_open.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.btn_open_folder.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.btn_rejects.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.btn_dark.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.btn_about.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
-                        let _ = me.cb_append.hwnd().SendMessage(msg::wm::SetFont { hfont, redraw: true });
+                        let _ = me.wnd.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.lst_logs.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.txt_search.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.btn_open.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.btn_open_folder.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.btn_rejects.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.btn_dark.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.btn_about.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                        let _ = me.cb_append.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
                     }
                 }
             } else {
@@ -482,21 +476,15 @@ impl MyWindow {
             lf_bold.lfWeight = co::FW::BOLD;
             
             // Re-copie du nom car lf_bold est une copie (par précaution)
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    font_name_utf16.as_ptr(),
-                    lf_bold.lfFaceName.as_mut_ptr(),
-                    font_name_utf16.len().min(lf_bold.lfFaceName.len())
-                );
-            }
+            // Re-copie du nom car lf_bold est une copie (par précaution)
+            lf_bold.set_lfFaceName(font_name);
 
             if let Ok(hfont_bold) = winsafe::HFONT::CreateFontIndirect(&lf_bold) {
                  *me.bold_font.write().expect("Lock failed") = Some(hfont_bold);
             }
-*/
             
             // Cacher la progress bar initialement
-            me.progress_bar.hwnd().ShowWindow(co::SW::HIDE).ok();
+            me.progress_bar.hwnd().ShowWindow(co::SW::HIDE);
             
             me.refresh_columns();
             Ok(0)
@@ -522,8 +510,8 @@ impl MyWindow {
             // Reset Cursor via BusyGuard Drop mechanism handled in thread, 
             // mais on s'assure ici que c'est fait
 
-            if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(co::IDC::ARROW) } {
-                winsafe::SetCursor(Some(&h_cursor));
+            if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
+                unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
             }
             Ok(0)
         });
@@ -534,8 +522,8 @@ impl MyWindow {
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
             let _ = me.status_bar.parts().get(1).set_text(&loader.get("ui-status-error"));
             
-            if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(co::IDC::ARROW) } {
-                winsafe::SetCursor(Some(&h_cursor));
+            if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) } {
+                 unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
             }
             me.is_busy.store(false, Ordering::SeqCst);
             me.trigger_async_filter(); // Initial filter
@@ -599,8 +587,8 @@ impl MyWindow {
         let me = self.clone();
         self.wnd.on().wm_set_cursor(move |p| {
             if me.is_busy.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
-                if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(co::IDC::WAIT) } {
-                    winsafe::SetCursor(Some(&h_cursor));
+                if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) } {
+                    unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
                     return Ok(true); 
                 }
             }
@@ -943,27 +931,19 @@ impl MyWindow {
     }
 
     // Appliquer une font sélectionnée via le menu
-    fn apply_font(&self, font_name: &str) {
+    fn apply_font(&self, font_name: &str) -> winsafe::AnyResult<()> {
         // Nettoyer l'ancienne font UI
         *self.ui_font.write().expect("Lock failed") = None;
         
-        let _target_font = if font_name == "System" { "Segoe UI" } else { font_name };
+        let target_font = if font_name == "System" { "Segoe UI" } else { font_name };
         
         // Créer nouvelle font personnalisée avec encodage UTF-16 correct et fallback
-/*
         let mut lf = winsafe::LOGFONT::default();
         lf.lfHeight = -12;
         lf.lfWeight = co::FW::NORMAL;
-        lf.lfCharSet = co::DEFAULT_CHARSET;
+        lf.lfCharSet = co::CHARSET::DEFAULT; // CORRECT
         
-        let font_name_utf16: Vec<u16> = target_font.encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                font_name_utf16.as_ptr(),
-                lf.lfFaceName.as_mut_ptr(),
-                font_name_utf16.len().min(lf.lfFaceName.len())
-            );
-        }
+        lf.set_lfFaceName(target_font);
         
         // TENTATIVE DE CRÉATION
         if let Ok(hfont) = winsafe::HFONT::CreateFontIndirect(&lf) {
@@ -972,23 +952,21 @@ impl MyWindow {
              // Appliquer la nouvelle font aux contrôles
             let font_handle = self.ui_font.read().expect("Lock failed").as_ref().map(|g| g.ptr());
             if let Some(ptr) = font_handle {
-                let hfont_msg = winsafe::HFONT::from_ptr(ptr);
                 unsafe {
-                    let _ = self.wnd.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.lst_logs.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.txt_search.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.btn_open.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.btn_open_folder.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.btn_rejects.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.btn_dark.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.btn_about.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
-                    let _ = self.cb_append.hwnd().SendMessage(msg::wm::SetFont { hfont: hfont_msg, redraw: true });
+                    let _ = self.wnd.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.lst_logs.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.txt_search.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.btn_open.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.btn_open_folder.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.btn_rejects.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.btn_dark.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.btn_about.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
+                    let _ = self.cb_append.hwnd().SendMessage(msg::wm::SetFont { hfont: winsafe::HFONT::from_ptr(ptr), redraw: true });
                 }
             }
         } else {
              eprintln!("[WARNING] Impossible de charger la police '{}'.", target_font);
         }
-*/
         
         // Forcer Windows à redessiner tous les controls avec la nouvelle font
         self.wnd.hwnd().InvalidateRect(None, true).ok();
@@ -1001,16 +979,15 @@ impl MyWindow {
             let _ = config.save();
         }
         
-        /*
         // Mettre à jour les checkmarks du menu
-        if let Ok(menu_bar) = self.wnd.hwnd().GetMenu() {
-            if let Ok(menu_view) = menu_bar.GetSubMenu(0) {
-                if let Ok(menu_font) = menu_view.GetSubMenu(0) {
+        if let Some(menu_bar) = self.wnd.hwnd().GetMenu() {
+            if let Some(menu_view) = menu_bar.GetSubMenu(0) {
+                if let Some(menu_font) = menu_view.GetSubMenu(0) {
                     // Décocher tous
-                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_SYSTEM), co::MF::UNCHECKED);
-                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_SEGOE), co::MF::UNCHECKED);
-                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_CONSOLAS), co::MF::UNCHECKED);
-                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_COURIER), co::MF::UNCHECKED);
+                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_SYSTEM), false);
+                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_SEGOE), false);
+                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_CONSOLAS), false);
+                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(ID_FONT_COURIER), false);
                     
                     // Cocher le nouveau choix
                     let id_to_check = match font_name {
@@ -1019,11 +996,11 @@ impl MyWindow {
                         "Courier New" => ID_FONT_COURIER,
                         _ => ID_FONT_SYSTEM,
                     };
-                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(id_to_check), co::MF::CHECKED);
+                    let _ = menu_font.CheckMenuItem(winsafe::IdPos::Id(id_to_check), true);
                 }
             }
         }
-        */
+        Ok(())
     }
 
     fn on_btn_open_clicked(&self) -> winsafe::AnyResult<()> {
