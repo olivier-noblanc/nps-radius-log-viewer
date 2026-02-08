@@ -494,7 +494,7 @@ impl MyWindow {
                      }
                  }
             }
-            Ok(0)
+            Ok(())
         });
 
         // --- Gestion du "Forçage" du Curseur (Immédiat) ---
