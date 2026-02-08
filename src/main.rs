@@ -640,7 +640,7 @@ impl MyWindow {
         let selected = self.lst_logs.items().selected_count();
         if selected == 0 {
             let len = self.filtered_ids.read().expect("Lock failed").len() as i32;
-            // Si rien, commencer AVANT le premier ou APRÈS le dernier pour vérifier toute la plage
+            // If nothing selected, start BEFORE first or AFTER last to check the whole range
             self.jump_to_error(if direction > 0 { -1 } else { len }, direction);
             return;
         }
@@ -672,15 +672,15 @@ impl MyWindow {
         let mut current = start_idx + direction;
         let mut found_idx: Option<i32> = None;
         
-        // Boucle pour trouver la prochaine ligne avec bg_color (Erreur)
-        // Limite pour éviter boucle infinie si 0 erreur
+        // Loop to find next line with log error
+        // Limit to avoid infinite loop if 0 errors found
         for _ in 0..len {
-            if current < 0 { current = len - 1; } // Boucle à la fin
-            if current >= len { current = 0; }   // Boucle au début
+            if current < 0 { current = len - 1; } // Wrap to end
+            if current >= len { current = 0; }   // Wrap to start
 
             if let Some(&real_idx) = filtered.get(current as usize) {
                 if let Some(req) = items.get(real_idx) {
-                    if req.resp_type == "Access-Reject" { // Cible uniquement les erreurs (Rouges)
+                    if req.resp_type == "Access-Reject" { // Target only rejects (Red)
                         found_idx = Some(current);
                         break; // Found it, exit loop
                     }
