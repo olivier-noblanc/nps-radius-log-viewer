@@ -431,8 +431,8 @@ impl MyWindow {
 
         let me = self.clone();
         self.wnd.on().wm_create(move |_| {
-           // On passe une chaîne vide pour désactiver le thème visuel (repasser en "Classique")
-           let _ = me.lst_logs.hwnd().SetWindowTheme("", Some(""));
+           // On force le thème "Explorer"
+           let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
 
             if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).and_then(|h| h.LoadIcon(winsafe::IdIdiStr::Id(1))) {
                  let _ = unsafe { me.wnd.hwnd().SendMessage(msg::wm::SetIcon { 
@@ -444,7 +444,7 @@ impl MyWindow {
             // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
             // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
             let ex_styles = co::LVS_EX::FULLROWSELECT 
-                // | co::LVS_EX::DOUBLEBUFFER // Removed to fix custom draw background colors
+                | co::LVS_EX::DOUBLEBUFFER
                 | co::LVS_EX::HEADERDRAGDROP;
             me.lst_logs.set_extended_style(true, ex_styles);
 
@@ -1336,19 +1336,23 @@ impl MyWindow {
                 };
                 
                 if let Some(clr) = item_color {
-                    // Si la ligne a une couleur personnalisée, on l'applique
+                    // Si la ligne a une couleur personnalisée (Vert ou Rouge)
+                    
+                    // Déterminer la couleur de Fond et de Texte
+                    // NOTE: Pour du Vert (0, 128, 0) ou Rouge (255, 0, 0), le texte DOIT être blanc pour être lisible.
+                    
                     let (bg, text_col) = if is_active {
-                        // SÉLECTIONNÉ -> FONCÉ (Couleurs plus classiques)
-                        let bg_color = if clr.0 == 220 || clr.0 == 200 { // Check bases on new light colors (approx) or keep logic
-                             winsafe::COLORREF::from_rgb(0, 128, 0) // Vert Classique Foncé
+                        // --- SÉLECTIONNÉ (Encore plus sombre) ---
+                        let bg_color = if clr.0 == 0 { 
+                             winsafe::COLORREF::from_rgb(0, 80, 0) // Vert très sombre
                         } else { 
-                             winsafe::COLORREF::from_rgb(200, 0, 0) // Rouge Classique Foncé
+                             winsafe::COLORREF::from_rgb(180, 0, 0) // Rouge brique sombre
                         };
-                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Blanc
+                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Texte Blanc
                     } else {
-                        // NORMAL -> CLAIR
+                        // --- NORMAL (Couleurs C# Standard) ---
                         let bg_color = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        (bg_color, winsafe::COLORREF::from_rgb(0, 0, 0)) // Noir
+                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Texte Blanc (Important sur fond foncé !)
                     };
 
                     // Application des couleurs
@@ -1666,8 +1670,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
                  req.reason = map_reason(code);
             }
             match p_type {
-                "2" => req.bg_color = Some((220, 255, 220)), // Vert pastel classique
-                "3" => req.bg_color = Some((255, 220, 220)), // Rouge pastel classique
+                "2" => req.bg_color = Some((0, 128, 0)),   // C# Color.Green (Dark Green)
+                "3" => req.bg_color = Some((255, 0, 0)),   // C# Color.Red
                 _ => {},
             }
         }
