@@ -442,8 +442,9 @@ impl MyWindow {
             }
 
             // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
+            // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
             let ex_styles = co::LVS_EX::FULLROWSELECT 
-                | co::LVS_EX::DOUBLEBUFFER
+                // | co::LVS_EX::DOUBLEBUFFER // Removed to fix custom draw background colors
                 | co::LVS_EX::HEADERDRAGDROP;
             me.lst_logs.set_extended_style(true, ex_styles);
 
@@ -1301,57 +1302,71 @@ impl MyWindow {
 
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
-            co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
-            co::CDDS::ITEMPREPAINT => {
-                // 1. Check if Selected (Mouse) OR Focused (Keyboard arrows)
-                let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
-                let is_focused = p.mcd.uItemState.has(co::CDIS::FOCUS);
+            // Étape 1 : On demande à Windows de dessiner chaque cellule (sous-colonne)
+            co::CDDS::PREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
 
+            // Étape 2 : Dessin d'une cellule
+            co::CDDS::ITEMPREPAINT => {
+                let item_idx = p.mcd.dwItemSpec as u32;
+                
+                // --- Détection active ---
+                // On vérifie la sélection ET le focus (clavier)
+                let is_selected = unsafe {
+                    self.lst_logs.hwnd().SendMessage(msg::lvm::GetItemState {
+                        index: item_idx,
+                        mask: co::LVIS::SELECTED,
+                    }).has(co::LVIS::SELECTED)
+                };
+
+                let focused_idx = unsafe { 
+                    self.lst_logs.hwnd().SendMessage(msg::lvm::GetNextItem {
+                        initial_index: Some(u32::MAX),
+                        relationship: co::LVNI::FOCUSED
+                    })
+                };
+                let is_focused = focused_idx.map(|i| i == item_idx).unwrap_or(false);
+
+                let is_active = is_selected || is_focused;
+
+                // --- Couleur de la ligne ---
                 let item_color = {
                     let items = self.all_items.read().expect("Lock failed");
                     let ids = self.filtered_ids.read().expect("Lock failed");
-                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items.get(idx).and_then(|it| it.bg_color))
+                    ids.get(item_idx as usize).and_then(|&idx| items.get(idx).and_then(|it| it.bg_color))
                 };
                 
                 if let Some(clr) = item_color {
-                    // Consider the line as "active" if it's selected OR has focus
-                    let is_active = is_selected || is_focused;
-
-                    // 2. If the line is active (keyboard or mouse), use dark color
-                    if is_active {
-                        let p_ptr = std::ptr::from_ref(p).cast_mut();
-                        unsafe {
-                            // Mask standard Windows selection to apply our dark green
-                            let mut state = (*p_ptr).mcd.uItemState;
-                            state &= !co::CDIS::SELECTED; // Mask selection
-                            std::ptr::write_volatile(&mut (*p_ptr).mcd.uItemState, state);
-                        }
-
-                        // Dark Green or Dark Red
-                        let bg = if clr.0 == 209 || clr.0 == 165 { 
-                            winsafe::COLORREF::from_rgb(50, 180, 120) // Dark green
+                    // Si la ligne a une couleur personnalisée, on l'applique
+                    let (bg, text_col) = if is_active {
+                        // SÉLECTIONNÉ -> FONCÉ (Couleurs plus classiques)
+                        let bg_color = if clr.0 == 220 || clr.0 == 200 { // Check bases on new light colors (approx) or keep logic
+                             winsafe::COLORREF::from_rgb(0, 128, 0) // Vert Classique Foncé
                         } else { 
-                            winsafe::COLORREF::from_rgb(220, 100, 100) // Dark red
+                             winsafe::COLORREF::from_rgb(200, 0, 0) // Rouge Classique Foncé
                         };
-                        
-                        let p_ptr = std::ptr::from_ref(p).cast_mut();
-                        unsafe {
-                            std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg);
-                            std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(255, 255, 255)); // White Text
-                        }
-                        return co::CDRF::NEWFONT;
-                    }
+                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Blanc
+                    } else {
+                        // NORMAL -> CLAIR
+                        let bg_color = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                        (bg_color, winsafe::COLORREF::from_rgb(0, 0, 0)) // Noir
+                    };
 
-                    // 3. Otherwise (inactive but colored line), use normal color (Light Green + Black)
-                    let bg = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
+                    // Application des couleurs
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
+                        // On masque la sélection bleue standard
+                        let mut state = (*p_ptr).mcd.uItemState;
+                        state &= !co::CDIS::SELECTED; 
+                        std::ptr::write_volatile(&mut (*p_ptr).mcd.uItemState, state);
+
                         std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg);
-                        std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(0, 0, 0)); // Black Text
+                        std::ptr::write_volatile(&mut (*p_ptr).clrText, text_col);
                     }
+                    
+                    // On dit "J'ai changé les couleurs, utilise-les"
                     co::CDRF::NEWFONT
                 } else {
-                    // Standard white line
+                    // Ligne blanche standard : on laisse Windows gérer (Bleu ou Blanc)
                     co::CDRF::DODEFAULT
                 }
             },
@@ -1651,8 +1666,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
                  req.reason = map_reason(code);
             }
             match p_type {
-                "2" => req.bg_color = Some((209, 250, 229)), // Emerald 100 (Modern Green)
-                "3" => req.bg_color = Some((255, 228, 230)), // Rose 100 (Modern Red)
+                "2" => req.bg_color = Some((220, 255, 220)), // Vert pastel classique
+                "3" => req.bg_color = Some((255, 220, 220)), // Rouge pastel classique
                 _ => {},
             }
         }
