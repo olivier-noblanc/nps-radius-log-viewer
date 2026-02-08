@@ -219,6 +219,31 @@ impl AppConfig {
         fs::write("config.json", s)?;
         Ok(())
     }
+
+}
+
+// Optimization: Zero-allocation case-insensitive substring search
+fn contains_ignore_case(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() { return true; }
+    let needle_len = needle_lower.len();
+    let haystack_len = haystack.len();
+
+    if needle_len > haystack_len { return false; }
+
+    let needle_bytes = needle_lower.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    
+    for i in 0..=(haystack_len - needle_len) {
+        let mut split_match = true;
+        for j in 0..needle_len {
+            if !haystack_bytes[i + j].to_ascii_lowercase().eq(&needle_bytes[j]) {
+                split_match = false;
+                break;
+            }
+        }
+        if split_match { return true; }
+    }
+    false
 }
 
 impl RadiusRequest {
@@ -227,17 +252,15 @@ impl RadiusRequest {
     fn matches(&self, query_lower: &str) -> bool {
         if query_lower.is_empty() { return true; }
         
-        // Helper to check a field (convert field to lowercase for comparison)
-        let check = |s: &str| s.to_ascii_lowercase().contains(query_lower);
-
-        check(&self.user) 
-        || check(&self.mac)
-        || check(&self.ap_ip)
-        || check(&self.ap_name)
-        || check(&self.server)
-        || check(&self.reason)
-        || check(&self.req_type)
-        || check(&self.resp_type)
+        // Use the zero-allocation helper
+        contains_ignore_case(&self.user, query_lower)
+        || contains_ignore_case(&self.mac, query_lower)
+        || contains_ignore_case(&self.ap_ip, query_lower)
+        || contains_ignore_case(&self.ap_name, query_lower)
+        || contains_ignore_case(&self.server, query_lower)
+        || contains_ignore_case(&self.reason, query_lower)
+        || contains_ignore_case(&self.req_type, query_lower)
+        || contains_ignore_case(&self.resp_type, query_lower)
     }
 
     fn to_tsv(&self) -> String {
@@ -410,8 +433,9 @@ impl MyWindow {
     fn on_wm_events(&self) {
         let me = self.clone();
         
-        // Restore window position on creation
+        // One single WM_CREATE handler
         self.wnd.on().wm_create(move |_| {
+            // 1. Restore window position
             let config = me.config.read().expect("Lock failed");
             if config.window_x != 0 || config.window_y != 0 {
                 let mut pt = winsafe::POINT::default();
@@ -428,6 +452,26 @@ impl MyWindow {
                     co::SWP::NOZORDER,
                 ).ok();
             }
+
+            // 2. Setup styles and theme
+            let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
+
+            if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).and_then(|h| h.LoadIcon(winsafe::IdIdiStr::Id(1))) {
+                let _ = send_message_safe(&me.wnd.hwnd(), msg::wm::SetIcon {
+                    hicon: clone_hicon(&hicon_guard),
+                    size: co::ICON_SZ::BIG
+                });
+            }
+
+            let ex_styles = co::LVS_EX::FULLROWSELECT 
+                | co::LVS_EX::DOUBLEBUFFER
+                | co::LVS_EX::HEADERDRAGDROP;
+            me.lst_logs.set_extended_style(true, ex_styles);
+
+            me.lst_logs.hwnd().InvalidateRect(None, true).ok();
+            me.progress_bar.hwnd().ShowWindow(co::SW::HIDE);
+            
+            me.refresh_columns();
             Ok(0)
         });
 
@@ -463,35 +507,7 @@ impl MyWindow {
             Ok(())
         });
 
-        let me = self.clone();
-        self.wnd.on().wm_create(move |_| {
-            // On force le thème "Explorer"
-            let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
 
-            if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).and_then(|h| h.LoadIcon(winsafe::IdIdiStr::Id(1))) {
-                let _ = send_message_safe(&me.wnd.hwnd(), msg::wm::SetIcon {
-                    hicon: clone_hicon(&hicon_guard),
-                    size: co::ICON_SZ::BIG
-                });
-            }
-
-            // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
-            // 2. Next, enable extended styles (FullRowSelect, DoubleBuffer, etc.)
-            let ex_styles = co::LVS_EX::FULLROWSELECT
-                | co::LVS_EX::DOUBLEBUFFER
-                | co::LVS_EX::HEADERDRAGDROP;
-            me.lst_logs.set_extended_style(true, ex_styles);
-
-            // 3. Force a refresh
-            me.lst_logs.hwnd().InvalidateRect(None, true).ok();
-
-
-            // Hide progress bar initially
-            me.progress_bar.hwnd().ShowWindow(co::SW::HIDE);
-
-            me.refresh_columns();
-            Ok(0)
-        });
 
         // Handle loading completion
         let me = self.clone();
@@ -639,10 +655,13 @@ impl MyWindow {
         // --- ListView Subclassing for Wait Cursor ---
         // Default: If busy, Force Wait Cursor on SetCursor event
         let me = self.clone();
-        self.wnd.on().wm_set_cursor(move |_| {
+        self.wnd.on().wm_set_cursor(move |p| {
             if me.is_busy.load(Ordering::SeqCst) {
-                set_system_cursor(co::IDC::WAIT);
-                return Ok(true); // Handled
+                 // Only force wait if in client area (HTCLIENT), preserving resize borders
+                 if p.hit_test == co::HT::CLIENT {
+                     set_system_cursor(co::IDC::WAIT);
+                     return Ok(true); // Handled
+                 }
             }
             Ok(false) // Let default handling proceed
         });
@@ -1152,19 +1171,29 @@ impl MyWindow {
         // The thread_local buffer stays alive, and we access it via unsafe
         use std::cell::UnsafeCell;
         thread_local! {
-            static WSTR_BUF: UnsafeCell<winsafe::WString> = UnsafeCell::new(winsafe::WString::new());
+            // Allocate 1KB buffer once per thread
+            static WSTR_BUF: UnsafeCell<winsafe::WString> = UnsafeCell::new(winsafe::WString::from_str(&" ".repeat(512)));
         }
         
         WSTR_BUF.with(|cell| {
-            // SAFETY: We are in a thread_local, so only one thread accesses it
-            // Windows does not modify the buffer, it only reads it
             unsafe {
-                let ws_ptr = cell.get();
-                *ws_ptr = winsafe::WString::from_str(text);
+                let ws = &mut *cell.get();
+                // Get raw pointer to the WString buffer
+                let buf_ptr = ws.as_ptr() as *mut u16;
+                
+                // Copy text into buffer manually (Zero allocation)
+                let mut idx = 0;
+                for c in text.encode_utf16() {
+                    if idx >= 511 { break; } // Safety limit
+                    *buf_ptr.add(idx) = c;
+                    idx += 1;
+                }
+                *buf_ptr.add(idx) = 0; // Null terminator
                 
                 let p_ptr = std::ptr::from_ref(p).cast_mut();
                 (*p_ptr).item.mask |= co::LVIF::TEXT;
-                (*p_ptr).item.set_pszText(Some(&mut *ws_ptr));
+                // winsafe set_pszText likely takes Option<&mut WString>
+                (*p_ptr).item.set_pszText(Some(ws));
             }
         });
         
