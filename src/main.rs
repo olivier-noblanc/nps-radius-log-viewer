@@ -1312,31 +1312,35 @@ impl MyWindow {
                     ids.get(p.mcd.dwItemSpec).and_then(|&idx| items.get(idx).and_then(|it| it.bg_color))
                 };
                 
-                // 3. Smart Drawing Strategy
-                // Strategy: Let Windows handle selection and even rows (pure look)
-                // Custom draw only for Colored logs and Odd (Zebra) rows
-                
+                // 2. Compute final colors
                 if let Some(clr) = item_color {
-                    // Success/Error log colors: Prioritize even if selected
+                    // Basic masking to help with Visibility
+                    if is_selected {
+                        let p_ptr = std::ptr::from_ref(p).cast_mut();
+                        unsafe {
+                            let mut state = (*p_ptr).mcd.uItemState;
+                            state &= !co::CDIS::SELECTED; // Mask selection
+                            std::ptr::write_volatile(&mut (*p_ptr).mcd.uItemState, state);
+                        }
+                    }
+
                     let bg = if is_selected {
-                        // Darken version for selection to show it's selected while keeping Red/Green info
-                        winsafe::COLORREF::from_rgb(
-                            clr.0.saturating_sub(40),
-                            clr.1.saturating_sub(40),
-                            clr.2.saturating_sub(40)
-                        )
+                        if clr.0 == 209 || clr.0 == 165 { // Green log
+                             winsafe::COLORREF::from_rgb(110, 231, 183) // Emerald 300 (Vert foncé)
+                        } else { // Red log
+                             winsafe::COLORREF::from_rgb(254, 205, 211) // Rose 200
+                        }
                     } else {
                         winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2)
                     };
-                    
+
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
                         std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg);
-                        std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(0, 0, 0));
+                        std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(0, 0, 0)); // Texte Noir
                     }
                     co::CDRF::NEWFONT
                 } else {
-                    // Standard rows: Let Windows handle flat background and native selection (Explorer look)
                     co::CDRF::DODEFAULT
                 }
             },
@@ -1640,8 +1644,8 @@ fn process_group(group: &[Event]) -> RadiusRequest {
                  req.reason = map_reason(code);
             }
             match p_type {
-                "2" => req.bg_color = Some((188, 255, 188)),
-                "3" => req.bg_color = Some((255, 188, 188)),
+                "2" => req.bg_color = Some((209, 250, 229)), // Emerald 100 (Modern Green)
+                "3" => req.bg_color = Some((255, 228, 230)), // Rose 100 (Modern Red)
                 _ => {},
             }
         }
