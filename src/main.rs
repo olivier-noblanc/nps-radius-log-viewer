@@ -488,7 +488,7 @@ impl MyWindow {
                 text: &loader.get("ui-append"), position: (780, 14), size: (80, 20), ..Default::default()
             }),
             status_bar:   gui::StatusBar::new(&wnd, &[
-                gui::SbPart::Fixed(200), gui::SbPart::Proportional(1),
+                gui::SbPart::Proportional(1),
             ]),
             progress_bar: gui::ProgressBar::new(
                 &wnd,
@@ -611,8 +611,7 @@ impl MyWindow {
             args.insert("raw", raw.to_string());
 
             let msg = loader.get_args("ui-status-display", args);
-            let _ = me.status_bar.parts().get(1).set_text(&clean_tr(&msg));
-            let _ = me.status_bar.parts().get(0).set_text("");
+            let _ = me.status_bar.parts().get(0).set_text(&clean_tr(&msg));
             me.lst_logs.hwnd().InvalidateRect(None, true).expect("Invalidate rect failed");
 
 
@@ -623,7 +622,7 @@ impl MyWindow {
         let me = self.clone();
         self.wnd.on().wm(WM_LOAD_ERROR, move |_| {
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-            let _ = me.status_bar.parts().get(1).set_text(&loader.get("ui-status-error"));
+            let _ = me.status_bar.parts().get(0).set_text(&loader.get("ui-status-error"));
 
 
             me.is_busy.store(false, Ordering::SeqCst);
@@ -927,7 +926,7 @@ impl MyWindow {
                     // Call loading logic directly in a thread
                     // Note: handle is_busy flag
                     if !me.is_busy.load(Ordering::SeqCst) {
-                        let _ = me.status_bar.parts().get(1).set_text("File changed, reloading...");
+                        let _ = me.status_bar.parts().get(0).set_text("File changed, reloading...");
 
                         let is_busy_bg = me.is_busy.clone();
                         let all_items_bg = me.all_items.clone();
@@ -1067,7 +1066,7 @@ impl MyWindow {
                 let _ = self.lst_logs.items().set_count(0, None);
             }
             
-            let _ = self.status_bar.parts().get(1).set_text(&loader.get("ui-status-loading"));
+            let _ = self.status_bar.parts().get(0).set_text(&loader.get("ui-status-loading"));
             
             let is_busy_bg = self.is_busy.clone();
             let all_items_bg = self.all_items.clone();
@@ -1138,7 +1137,7 @@ impl MyWindow {
             }
             
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-            let _ = self.status_bar.parts().get(1).set_text(&loader.get("ui-status-loading-folder"));
+            let _ = self.status_bar.parts().get(0).set_text(&loader.get("ui-status-loading-folder"));
             
             let folder_path_str = folder_path.clone();
             let is_append = self.cb_append.is_checked();
@@ -1667,6 +1666,15 @@ fn parse_full_logic(path: &str, hwnd: Option<SafeHWND>) -> anyhow::Result<(Vec<R
     let mut event_blobs = Vec::new();
     let mut last_progress = 0u8;
 
+    // Send initial 0% progress to show the progress bar
+    if let Some(sh) = hwnd {
+        let _ = post_message_safe(&sh.h(), msg::WndMsg {
+            msg_id: WM_PROGRESS,
+            wparam: 0,
+            lparam: 0,
+        });
+    }
+
     // --- PHASE 1: SEQUENTIAL EXTRACTION (0% to 50%) ---
     loop {
         match reader.read_event_into(&mut buf) {
@@ -1757,6 +1765,15 @@ fn parse_full_logic(path: &str, hwnd: Option<SafeHWND>) -> anyhow::Result<(Vec<R
     let requests: Vec<RadiusRequest> = groups.into_par_iter()
         .map(|g| process_group(&g))
         .collect();
+
+    // Send 100% progress to hide the progress bar
+    if let Some(sh) = hwnd {
+        let _ = post_message_safe(&sh.h(), msg::WndMsg {
+            msg_id: WM_PROGRESS,
+            wparam: 100,
+            lparam: 0,
+        });
+    }
         
     Ok((requests, raw_event_count))
 }
