@@ -192,13 +192,11 @@ struct MyWindow {
     btn_rejects:  gui::Button,
     btn_prev_err: gui::Button, // Navigation erreur
     btn_next_err: gui::Button, // Navigation erreur
-    btn_dark:     gui::Button, // Nouveau bouton Dark Mode
     btn_about:    gui::Button,
     cb_append:    gui::CheckBox,
     status_bar:   gui::StatusBar,
     progress_bar: gui::ProgressBar,
     
-    // CHANGEMENT: Mutex -> RwLock pour permettre la lecture pendant l'écriture
     all_items:    Arc<RwLock<Vec<RadiusRequest>>>,
     raw_count:    Arc<RwLock<usize>>,
     filtered_ids: Arc<RwLock<Vec<usize>>>,
@@ -208,7 +206,6 @@ struct MyWindow {
     visible_cols: Arc<RwLock<Vec<LogColumn>>>,
     config:       Arc<RwLock<AppConfig>>,
     is_busy:      Arc<AtomicBool>,
-    dark_mode:    Arc<AtomicBool>, // Nouveau champ
     
     // Pour le Tail mode
     current_file_path: Arc<Mutex<Option<String>>>,
@@ -283,9 +280,6 @@ impl MyWindow {
                 width: 70, height: 30,
                 ..Default::default()
             }),
-            btn_dark:     gui::Button::new(&wnd, gui::ButtonOpts {
-                text: "Dark Mode", position: (670, 10), width: 100, height: 30, ..Default::default()
-            }),
             btn_about: gui::Button::new(&wnd, gui::ButtonOpts {
                 text: &loader.get("about_title"), position: (config.window_width - 130, 10), width: 120, height: 30,
                 resize_behavior: (gui::Horz::Repos, gui::Vert::None), ..Default::default()
@@ -315,7 +309,6 @@ impl MyWindow {
             visible_cols: Arc::new(RwLock::new(config.visible_columns.clone())),
             config:       Arc::new(RwLock::new(config)),
             is_busy:      Arc::new(AtomicBool::new(false)),
-            dark_mode:    Arc::new(AtomicBool::new(false)),
             current_file_path: Arc::new(Mutex::new(None)),
             last_file_size:    Arc::new(Mutex::new(0)),
             watcher:           Arc::new(Mutex::new(None)),
@@ -360,6 +353,9 @@ impl MyWindow {
 
         let me = self.clone();
         self.wnd.on().wm_create(move |_| {
+            // 1. Re-enable Explorer theme as it's "better" now with simplified drawing
+            let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
+
             if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).and_then(|h| h.LoadIcon(winsafe::IdIdiStr::Id(1))) {
                  let _ = unsafe { me.wnd.hwnd().SendMessage(msg::wm::SetIcon { 
                      hicon: winsafe::HICON::from_ptr(hicon_guard.ptr()), 
@@ -367,18 +363,18 @@ impl MyWindow {
                  }) };
             }
 
-            // Extended styles
+            // 2. Ensuite, activer les styles étendus (FullRowSelect, DoubleBuffer, etc.)
             let _ = unsafe { me.lst_logs.hwnd().SendMessage(msg::lvm::SetExtendedListViewStyle {
                         mask: co::LVS_EX::FULLROWSELECT 
                             | co::LVS_EX::DOUBLEBUFFER
-                            | co::LVS_EX::GRIDLINES
                             | co::LVS_EX::HEADERDRAGDROP,
                         style: co::LVS_EX::FULLROWSELECT 
                             | co::LVS_EX::DOUBLEBUFFER 
-                            | co::LVS_EX::GRIDLINES 
                             | co::LVS_EX::HEADERDRAGDROP,
                     }) };
-            let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
+
+            // 3. Forcer un rafraîchissement
+            me.lst_logs.hwnd().InvalidateRect(None, true).ok();
 
             
             // Cacher la progress bar initialement
@@ -623,11 +619,8 @@ impl MyWindow {
         });
 
         self.btn_rejects.on().bn_clicked({ let me = self.clone(); move || me.on_btn_rejects_clicked() });
-        self.btn_dark.on().bn_clicked({ let me = self.clone(); move || me.on_btn_dark_clicked() });
         self.btn_about.on().bn_clicked({ let me = self.clone(); move || me.on_btn_about_clicked() });
         self.lst_logs.on().nm_custom_draw({ let me = self.clone(); move |p| Ok(me.on_lst_nm_custom_draw(p)) });
-
-
     }
 
     // --- Logique de filtrage asynchrone ---
@@ -638,23 +631,6 @@ impl MyWindow {
             &clean_tr(&loader.get("about_title")),
             co::MB::OK | co::MB::ICONINFORMATION,
         )?;
-        Ok(())
-    }
-
-    fn on_btn_dark_clicked(&self) -> winsafe::AnyResult<()> {
-        let is_dark = self.dark_mode.load(Ordering::SeqCst);
-        self.dark_mode.store(!is_dark, Ordering::SeqCst);
-        
-        let txt = if !is_dark { "Light Mode" } else { "Dark Mode" };
-        let _ = self.btn_dark.hwnd().SetWindowText(txt);
-        
-        // Redrawn list logic handled in custom draw, just invalidate
-        self.lst_logs.hwnd().InvalidateRect(None, true).unwrap();
-        
-        // Optionnel: Changer la couleur de fond de la liste pour éviter le flash blanc (nécessite subclassing plus complexe ou gestion WM_ERASEBKGND)
-        // Pour l'instant on se contente du CustomDraw des items.
-        // On pourrait aussi changer la couleur de fond de la fenêtre principale ici si on gérait le WM_CTLCOLOR*.
-        
         Ok(())
     }
 
@@ -1326,79 +1302,43 @@ impl MyWindow {
         match p.mcd.dwDrawStage {
             co::CDDS::PREPAINT => co::CDRF::NOTIFYITEMDRAW,
             co::CDDS::ITEMPREPAINT => {
-                let is_dark = self.dark_mode.load(Ordering::SeqCst);
-                // Détection de la sélection : uItemState contient le flag CDIS_SELECTED
-                let is_selected = (p.mcd.uItemState & co::CDIS::SELECTED) != unsafe { co::CDIS::from_raw(0) };
+                // SELECTION DETECTION
+                let is_selected = p.mcd.uItemState.has(co::CDIS::SELECTED);
 
-                // 1. Récupérer la couleur spécifique (Rouge/Vert) si elle existe
+                // 1. Get specific log color (Green/Red) if exists
                 let item_color = {
                     let items = self.all_items.read().expect("Lock failed");
                     let ids = self.filtered_ids.read().expect("Lock failed");
-                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items[idx].bg_color)
+                    ids.get(p.mcd.dwItemSpec).and_then(|&idx| items.get(idx).and_then(|it| it.bg_color))
                 };
                 
-                // 3. Calculer la couleur finale
-                let (bg_color, text_color) = if let Some(clr) = item_color {
-                    // --- CAS A : Ligne avec une couleur de log (Rouge/Vert) ---
-                    
-                    if is_selected {
-                        // SI SÉLECTIONNÉE : On assombrit la couleur pour montrer l'activité sans perdre l'info
-                        // (Réduit la luminosité de 30%)
-                        let r = (clr.0 as f32 * 0.7) as u8;
-                        let g = (clr.1 as f32 * 0.7) as u8;
-                        let b = (clr.2 as f32 * 0.7) as u8;
-                        
-                        let bg = winsafe::COLORREF::from_rgb(r, g, b);
-                        // Texte blanc pour être lisible sur fond sombre
-                        (bg, winsafe::COLORREF::from_rgb(255, 255, 255)) 
+                // 3. Smart Drawing Strategy
+                // Strategy: Let Windows handle selection and even rows (pure look)
+                // Custom draw only for Colored logs and Odd (Zebra) rows
+                
+                if let Some(clr) = item_color {
+                    // Success/Error log colors: Prioritize even if selected
+                    let bg = if is_selected {
+                        // Darken version for selection to show it's selected while keeping Red/Green info
+                        winsafe::COLORREF::from_rgb(
+                            clr.0.saturating_sub(40),
+                            clr.1.saturating_sub(40),
+                            clr.2.saturating_sub(40)
+                        )
                     } else {
-                        // SI NON SÉLECTIONNÉE : Couleur normale
-                        if is_dark {
-                            (winsafe::COLORREF::from_rgb(clr.0/2, clr.1/2, clr.2/2), winsafe::COLORREF::from_rgb(255, 255, 255))
-                        } else {
-                            (winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2), winsafe::COLORREF::from_rgb(0, 0, 0))
-                        }
+                        winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2)
+                    };
+                    
+                    let p_ptr = std::ptr::from_ref(p).cast_mut();
+                    unsafe {
+                        std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg);
+                        std::ptr::write_volatile(&mut (*p_ptr).clrText, winsafe::COLORREF::from_rgb(0, 0, 0));
                     }
+                    co::CDRF::NEWFONT
                 } else {
-                    // --- CAS B : Ligne standard (Zébrée) ---
-                    
-                    if is_selected {
-                        // SI SÉLECTIONNÉE : On utilise la couleur de sélection SYSTÈME (Bleu standard)
-                        // Cela permet de différencier clairement une ligne sélectionnée
-                        
-                        let sys_bg = winsafe::GetSysColor(co::COLOR::HIGHLIGHT);
-                        let sys_txt = winsafe::GetSysColor(co::COLOR::HIGHLIGHTTEXT);
-                        (sys_bg, sys_txt)
-                        
-                        // (winsafe::COLORREF::from_rgb(0, 120, 215), winsafe::COLORREF::from_rgb(255, 255, 255))
-                    } else {
-                        // SI NON SÉLECTIONNÉE : Zébrage normal
-                        let is_zebra = (p.mcd.dwItemSpec % 2) != 0;
-                        if is_dark {
-                            if is_zebra {
-                                (winsafe::COLORREF::from_rgb(35, 35, 35), winsafe::COLORREF::from_rgb(220, 220, 220))
-                            } else {
-                                (winsafe::COLORREF::from_rgb(30, 30, 30), winsafe::COLORREF::from_rgb(220, 220, 220))
-                            }
-                        } else {
-                            if is_zebra {
-                                (winsafe::COLORREF::from_rgb(245, 245, 245), winsafe::COLORREF::from_rgb(0, 0, 0))
-                            } else {
-                                (winsafe::COLORREF::from_rgb(255, 255, 255), winsafe::COLORREF::from_rgb(0, 0, 0))
-                            }
-                        }
-                    }
-                };
-
-                // 4. Application des couleurs
-                let p_ptr = std::ptr::from_ref(p).cast_mut();
-                unsafe {
-                    std::ptr::write_volatile(&mut (*p_ptr).clrTextBk, bg_color);
-                    std::ptr::write_volatile(&mut (*p_ptr).clrText, text_color);
-                    
-                    // Appliquer la police en gras si nécessaire
+                    // Standard rows: Let Windows handle flat background and native selection (Explorer look)
+                    co::CDRF::DODEFAULT
                 }
-                co::CDRF::NEWFONT
             },
             _ => co::CDRF::DODEFAULT,
         }
