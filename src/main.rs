@@ -25,6 +25,7 @@ extern "system" {
 
 /// Définit le curseur système.
 /// Cette fonction est "Safe" car elle valide les entrées et encapsule l'unsafe.
+#[allow(unsafe_code)]
 pub fn set_system_cursor(cursor_id: winsafe::co::IDC) {
     // 1. Winsafe charge le curseur pour nous. Si ça échoue, on ne fait rien.
     //    winsafe garantit que si Ok(hcursor), alors le pointeur est valide.
@@ -52,22 +53,26 @@ struct Localizations;
 static LANGUAGE_LOADER: OnceLock<FluentLanguageLoader> = OnceLock::new();
 
 // --- FONCTIONS SAFE WRAPPERS ---
+#[allow(unsafe_code)]
 pub const fn make_wm_safe(v: u32) -> co::WM {
     unsafe { co::WM::from_raw(v) }
 }
 
+#[allow(unsafe_code)]
 pub fn send_message_safe<M>(hwnd: &winsafe::HWND, msg: M) -> M::RetType
 where M: winsafe::prelude::MsgSend,
 {
     unsafe { hwnd.SendMessage(msg) }
 }
 
+#[allow(unsafe_code)]
 pub fn post_message_safe<M>(hwnd: &winsafe::HWND, msg: M) -> winsafe::SysResult<()>
 where M: winsafe::prelude::MsgSend + Copy + Send + 'static,
 {
     unsafe { hwnd.PostMessage(msg) }
 }
 
+#[allow(unsafe_code)]
 pub fn clone_hicon(hicon: &winsafe::guard::DestroyIconGuard) -> winsafe::HICON {
     unsafe { winsafe::HICON::from_ptr(hicon.ptr()) }
 }
@@ -91,6 +96,7 @@ impl SafeHWND {
     fn from_hwnd(h: &winsafe::HWND) -> Self {
         Self(h.ptr() as isize)
     }
+    #[allow(unsafe_code)]
     fn h(&self) -> winsafe::HWND {
         unsafe { winsafe::HWND::from_ptr(self.0 as *mut _) }
     }
@@ -342,48 +348,29 @@ impl AboutWindow {
         new_self
     }
 
+    #[allow(unsafe_code)]
     fn on_wm_events(&self) {
         let me = self.clone();
         self.wnd.on().wm_create(move |_| {
             let hinst = winsafe::HINSTANCE::GetModuleHandle(None).unwrap();
             
-            // Use LoadImageW directly via FFI for explicit size control
-            // IMAGE_ICON = 1, LR_SHARED = 0x8000
-            const IMAGE_ICON: u32 = 1;
-            const LR_SHARED: u32 = 0x8000;
-            let icon_size: i32 = 128;
-            
-            #[link(name = "user32")]
-            extern "system" {
-                fn LoadImageW(
-                    hInst: *mut std::ffi::c_void,
-                    name: usize, // MAKEINTRESOURCE(1) = 1
-                    r#type: u32,
-                    cx: i32,
-                    cy: i32,
-                    fuLoad: u32,
-                ) -> *mut std::ffi::c_void;
-            }
-            
-            let hicon_ptr = unsafe {
-                LoadImageW(hinst.ptr(), 1, IMAGE_ICON, icon_size, icon_size, LR_SHARED)
-            };
-            
-            if !hicon_ptr.is_null() {
-                let _ = unsafe {
-                    me.stc_icon.hwnd().SendMessage(msg::WndMsg {
-                        msg_id: co::WM::from_raw(0x0172), // STM_SETIMAGE
-                        wparam: 1, // IMAGE_ICON
-                        lparam: hicon_ptr as isize,
-                    })
-                };
+            // Load icon from resource ID 1 using winsafe high-level API
+            let icon_size = winsafe::SIZE::with(128, 128);
+            if let Ok(hicon_guard) = hinst.LoadImageIcon(
+                winsafe::IdOicStr::Id(1),
+                icon_size,
+                co::LR::DEFAULTCOLOR | co::LR::SHARED,
+            ) {
+                // Clone the HICON to use with SetIcon (guard will not destroy due to LR_SHARED)
+                let hicon = clone_hicon(&hicon_guard);
+                let _ = send_message_safe(&me.stc_icon.hwnd(), msg::stm::SetIcon { icon: &hicon });
             }
             Ok(0)
         });
 
         let wnd = self.wnd.clone();
         self.btn_ok.on().bn_clicked(move || {
-            unsafe { wnd.hwnd().SendMessage(winsafe::msg::wm::Close {}); }
+            let _ = send_message_safe(&wnd.hwnd(), winsafe::msg::wm::Close {});
             Ok(())
         });
     }
@@ -1228,6 +1215,7 @@ impl MyWindow {
         Ok(())
     }
 
+    #[allow(unsafe_code)]
     fn on_lst_lvn_get_disp_info(&self, p: &winsafe::NMLVDISPINFO) -> winsafe::AnyResult<()> {
         let item_idx = p.item.iItem;
         let real_idx = {
@@ -1342,6 +1330,8 @@ impl MyWindow {
     fn on_lst_context_menu(&self, pt_screen: winsafe::POINT, _target_hwnd: winsafe::HWND) -> winsafe::AnyResult<()> {
         // Identical to original, but watch out for locks (read for visible_cols)
         let h_header = if let Some(header) = self.lst_logs.header() {
+            // SAFETY: We clone the HWND from the header control pointer
+            #[allow(unsafe_code)]
             unsafe { winsafe::HWND::from_ptr(header.hwnd().ptr()) }
         } else {
             winsafe::HWND::NULL
@@ -1447,6 +1437,7 @@ impl MyWindow {
         self.trigger_async_filter();
     }
 
+    #[allow(unsafe_code)]
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
             // Étape 1 : On demande à Windows de dessiner chaque cellule (sous-colonne)
@@ -1457,16 +1448,10 @@ impl MyWindow {
                 let item_idx = p.mcd.dwItemSpec as u32;
                 
                 // --- Détection active ---
-                // On vérifie la sélection ET le focus (clavier)
-                let is_selected = send_message_safe(&self.lst_logs.hwnd(), msg::lvm::GetItemState {
-                    index: item_idx,
-                    mask: co::LVIS::SELECTED,
-                }).has(co::LVIS::SELECTED);
+                // On vérifie la sélection ET le focus (clavier) via les méthodes winsafe de haut niveau
+                let is_selected = self.lst_logs.items().get(item_idx).is_selected();
 
-                let focused_idx = send_message_safe(&self.lst_logs.hwnd(), msg::lvm::GetNextItem {
-                    initial_index: Some(u32::MAX),
-                    relationship: co::LVNI::FOCUSED
-                });
+                let focused_idx = self.lst_logs.items().focused().map(|item| item.index());
                 let is_focused = focused_idx.map(|i| i == item_idx).unwrap_or(false);
 
                 let is_active = is_selected || is_focused;
