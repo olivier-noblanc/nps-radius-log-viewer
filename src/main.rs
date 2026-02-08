@@ -3,7 +3,6 @@
 
 use winsafe::prelude::*;
 use winsafe::{gui, co, msg};
-use windows::Win32::UI::WindowsAndMessaging::{SetCursor as WinSetCursor, HCURSOR as WinHCURSOR, LoadCursorW, IDC_WAIT, IDC_ARROW};
 use quick_xml::de::from_str;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,6 +13,13 @@ use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::time::Duration;
 use notify::{Watcher, RecursiveMode};
+
+// Manual FFI declaration for SetCursor (not exported by winsafe)
+// This allows us to use winsafe's HCURSOR with the native SetCursor function
+#[link(name = "user32")]
+extern "system" {
+    fn SetCursor(hcursor: isize) -> isize;
+}
 
 // --- Internationalization ---
 use i18n_embed::{
@@ -576,10 +582,8 @@ impl MyWindow {
                     // CRUCIAL: Check IF mouse is INSIDE the list client area
                     // If mouse is over a button or border, don't force anything.
                     if client_pt.x >= 0 && client_pt.y >= 0 && client_pt.x < rc.right && client_pt.y < rc.bottom {
-                        unsafe {
-                            if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
-                                WinSetCursor(Some(WinHCURSOR(h_cursor.0)));
-                            }
+                        if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
+                            unsafe { SetCursor(h_cursor.ptr() as isize); }
                         }
                     }
                 }
@@ -589,10 +593,8 @@ impl MyWindow {
 
         // Message: Force Arrow Cursor (Normal)
         self.wnd.on().wm(WM_FORCE_NORMAL, move |_| {
-            unsafe {
-                if let Ok(h_cursor) = LoadCursorW(None, IDC_ARROW) {
-                    WinSetCursor(Some(WinHCURSOR(h_cursor.0)));
-                }
+            if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::ARROW)) {
+                unsafe { SetCursor(h_cursor.ptr() as isize); }
             }
             Ok(0)
         });
@@ -607,8 +609,8 @@ impl MyWindow {
         let me = self.clone();
         self.lst_logs.on_subclass().wm_set_cursor(move |p| {
             if me.is_busy.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
-                if let Ok(h_cursor) = unsafe { winsafe::HINSTANCE::from_ptr(std::ptr::null_mut()).LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) } {
-                    unsafe { WinSetCursor(Some(WinHCURSOR(h_cursor.ptr() as _))); }
+                if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(co::IDC::WAIT)) {
+                    unsafe { SetCursor(h_cursor.ptr() as isize); }
                     return Ok(true);
                 }
             }

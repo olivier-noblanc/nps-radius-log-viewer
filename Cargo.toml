@@ -26,7 +26,6 @@ clipboard-win = "5.4.1"
 i18n-embed = { version = "0.15", features = ["fluent-system", "desktop-requester"] }
 rust-embed = "8.5"
 unic-langid = "0.9"
-windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 fluent = "0.17.0"
 
 
