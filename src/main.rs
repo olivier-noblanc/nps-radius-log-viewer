@@ -654,16 +654,15 @@ impl MyWindow {
 
         // --- ListView Subclassing for Wait Cursor ---
         // Default: If busy, Force Wait Cursor on SetCursor event
-        let me = self.clone();
-        self.wnd.on().wm_set_cursor(move |p| {
-            if me.is_busy.load(Ordering::SeqCst) {
-                 // Only force wait if in client area (HTCLIENT), preserving resize borders
-                 if p.hit_test == co::HT::CLIENT {
-                     set_system_cursor(co::IDC::WAIT);
-                     return Ok(true); // Handled
-                 }
+        // --- HIGH-LEVEL SUBCLASSING FOR WAIT CURSOR ---
+        // Only subclass the ListView to avoid interfering with window resizing (borders/frame)
+        let is_busy_flag2 = self.is_busy.clone();
+        self.lst_logs.on_subclass().wm_set_cursor(move |p| {
+            if is_busy_flag2.load(Ordering::SeqCst) && p.hit_test == co::HT::CLIENT {
+                set_system_cursor(co::IDC::WAIT);
+                return Ok(true);
             }
-            Ok(false) // Let default handling proceed
+            Ok(false)
         });
 
         self.wnd.on().wm_context_menu({ let me = self.clone(); move |p| {
