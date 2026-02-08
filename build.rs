@@ -5,7 +5,7 @@ fn main() -> io::Result<()> {
     let mut res = winres::WindowsResource::new();
     
     // Set icon with explicit ID 1
-    res.set_icon_with_id("app.ico", "1");
+    res.set_icon_with_id("assets/app.ico", "1");
     
     // Métadonnées (déjà présentes dans votre code)
     res.set("ProductName", "RADIUS Log Browser");

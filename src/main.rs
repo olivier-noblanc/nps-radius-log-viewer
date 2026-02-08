@@ -291,6 +291,108 @@ impl LogColumn {
     }
 }
 
+// --- About Window ---
+
+#[derive(Clone)]
+struct AboutWindow {
+    wnd:      gui::WindowModal,
+    stc_icon: gui::Label,
+    lbl_text: gui::Label,
+    btn_ok:   gui::Button,
+}
+
+impl AboutWindow {
+    pub fn new() -> Self {
+        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+        
+        let wnd = gui::WindowModal::new(gui::WindowModalOpts {
+            title: &loader.get("about_title"),
+            size: (420, 360),
+            style: co::WS::CAPTION | co::WS::SYSMENU | co::WS::VISIBLE,
+            ..Default::default()
+        });
+
+        // Icon control - size (0,0) lets Windows auto-size
+        let stc_icon = gui::Label::new(&wnd, gui::LabelOpts {
+            position: (146, 20),
+            size: (0, 0),
+            control_style: co::SS::ICON | co::SS::NOTIFY,
+            ..Default::default()
+        });
+
+        let lbl_text = gui::Label::new(&wnd, gui::LabelOpts {
+            text: &format!("{}\n\n{}", 
+                clean_tr(&loader.get("about_text")),
+                clean_tr(&loader.get("about_shortcuts"))),
+            position: (20, 160),
+            size: (380, 130),
+            ..Default::default()
+        });
+
+        let btn_ok = gui::Button::new(&wnd, gui::ButtonOpts {
+            text: "OK",
+            position: (170, 310),
+            width: 80,
+            height: 30,
+            ..Default::default()
+        });
+
+        let new_self = Self { wnd, stc_icon, lbl_text, btn_ok };
+        new_self.on_wm_events();
+        new_self
+    }
+
+    fn on_wm_events(&self) {
+        let me = self.clone();
+        self.wnd.on().wm_create(move |_| {
+            let hinst = winsafe::HINSTANCE::GetModuleHandle(None).unwrap();
+            
+            // Use LoadImageW directly via FFI for explicit size control
+            // IMAGE_ICON = 1, LR_SHARED = 0x8000
+            const IMAGE_ICON: u32 = 1;
+            const LR_SHARED: u32 = 0x8000;
+            let icon_size: i32 = 128;
+            
+            #[link(name = "user32")]
+            extern "system" {
+                fn LoadImageW(
+                    hInst: *mut std::ffi::c_void,
+                    name: usize, // MAKEINTRESOURCE(1) = 1
+                    r#type: u32,
+                    cx: i32,
+                    cy: i32,
+                    fuLoad: u32,
+                ) -> *mut std::ffi::c_void;
+            }
+            
+            let hicon_ptr = unsafe {
+                LoadImageW(hinst.ptr(), 1, IMAGE_ICON, icon_size, icon_size, LR_SHARED)
+            };
+            
+            if !hicon_ptr.is_null() {
+                let _ = unsafe {
+                    me.stc_icon.hwnd().SendMessage(msg::WndMsg {
+                        msg_id: co::WM::from_raw(0x0172), // STM_SETIMAGE
+                        wparam: 1, // IMAGE_ICON
+                        lparam: hicon_ptr as isize,
+                    })
+                };
+            }
+            Ok(0)
+        });
+
+        let wnd = self.wnd.clone();
+        self.btn_ok.on().bn_clicked(move || {
+            unsafe { wnd.hwnd().SendMessage(winsafe::msg::wm::Close {}); }
+            Ok(())
+        });
+    }
+
+    pub fn show(&self, parent: &impl winsafe::prelude::GuiParent) -> winsafe::AnyResult<()> {
+        self.wnd.show_modal(parent)
+    }
+}
+
 // --- UI Application ---
 
 #[derive(Clone)]
@@ -744,16 +846,8 @@ impl MyWindow {
 
     // --- Logique de filtrage asynchrone ---
     fn on_btn_about_clicked(&self) -> winsafe::AnyResult<()> {
-        let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
-        let about_msg = format!("{}\n\n{}",
-            clean_tr(&loader.get("about_text")),
-            clean_tr(&loader.get("about_shortcuts"))
-        );
-        self.wnd.hwnd().MessageBox(
-            &about_msg,
-            &clean_tr(&loader.get("about_title")),
-            co::MB::OK | co::MB::ICONINFORMATION,
-        )?;
+        let about_win = AboutWindow::new();
+        about_win.show(&self.wnd)?;
         Ok(())
     }
 
