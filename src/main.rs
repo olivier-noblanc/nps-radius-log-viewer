@@ -1326,7 +1326,7 @@ impl MyWindow {
 
                     let bg = if is_selected {
                         if clr.0 == 209 || clr.0 == 165 { // Green log
-                             winsafe::COLORREF::from_rgb(110, 231, 183) // Emerald 300 (Vert foncé)
+                             winsafe::COLORREF::from_rgb(110, 231, 183) // Emerald 300 (Vert Moyen)
                         } else { // Red log
                              winsafe::COLORREF::from_rgb(254, 205, 211) // Rose 200
                         }
