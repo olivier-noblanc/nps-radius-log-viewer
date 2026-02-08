@@ -639,8 +639,9 @@ impl MyWindow {
         // 1. Trouver l'index sélectionné actuel
         let selected = self.lst_logs.items().selected_count();
         if selected == 0 {
-            // Si rien, commencer au début (ou fin selon direction)
-            self.jump_to_error(if direction > 0 { 0 } else { -1 }, direction);
+            let len = self.filtered_ids.read().expect("Lock failed").len() as i32;
+            // Si rien, commencer AVANT le premier ou APRÈS le dernier pour vérifier toute la plage
+            self.jump_to_error(if direction > 0 { -1 } else { len }, direction);
             return;
         }
         
@@ -679,7 +680,7 @@ impl MyWindow {
 
             if let Some(&real_idx) = filtered.get(current as usize) {
                 if let Some(req) = items.get(real_idx) {
-                    if req.bg_color.is_some() {
+                    if req.resp_type == "Access-Reject" { // Cible uniquement les erreurs (Rouges)
                         found_idx = Some(current);
                         break; // Found it, exit loop
                     }
@@ -1341,6 +1342,7 @@ impl MyWindow {
                     }
                     co::CDRF::NEWFONT
                 } else {
+                    // --- CASE B: STANDARD LINE ---
                     co::CDRF::DODEFAULT
                 }
             },
