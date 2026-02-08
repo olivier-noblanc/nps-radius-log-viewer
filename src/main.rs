@@ -3,7 +3,7 @@
 
 use winsafe::prelude::*;
 use winsafe::{gui, co, msg};
-use windows::Win32::UI::WindowsAndMessaging::{SetCursor as WinSetCursor, HCURSOR as WinHCURSOR};
+use windows::Win32::UI::WindowsAndMessaging::{SetCursor as WinSetCursor, HCURSOR as WinHCURSOR, LoadCursorW, IDC_WAIT, IDC_ARROW};
 use quick_xml::de::from_str;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,8 @@ const WM_LOAD_ERROR: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 2) 
 const WM_FILTER_DONE: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 3) }; // Nouveau message
 const WM_PROGRESS: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 10) }; // Pour la barre de progression
 const WM_FILE_CHANGED: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 11) }; // Pour le Tail mode
+const WM_FORCE_WAIT: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 20) };
+const WM_FORCE_NORMAL: co::WM = unsafe { co::WM::from_raw(co::WM::USER.raw() + 21) };
 const IDT_SEARCH_TIMER: usize = 100; // ID pour le timer de recherche
 
 // IDs pour le menu Font
@@ -472,27 +474,63 @@ impl MyWindow {
             Ok(0)
         });
 
-
-
         // --- Gestion des Raccourcis Clavier ---
         let me = self.clone();
         self.wnd.on().wm_key_down(move |p| {
             let v = p.vkey_code;
-            // GetAsyncKeyState is already safe in winsafe
             let ctrl = (winsafe::GetAsyncKeyState(co::VK::CONTROL) as u16 & 0x8000) != 0;
             
-            // Compare raw u16 values
             if v.raw() == 'F' as u16 && ctrl {
                 let _ = me.txt_search.hwnd().SetFocus();
             } else if v.raw() == 'O' as u16 && ctrl {
                  let _ = me.on_btn_open_clicked();
             } else if v == co::VK::F5 {
-                 if me.current_file_path.lock().unwrap().is_some() {
-                     *me.last_file_size.lock().unwrap() = 0;
-                     me.handle_file_change();
+                 if let Ok(guard) = me.current_file_path.lock() {
+                     if guard.is_some() {
+                         if let Ok(mut size_guard) = me.last_file_size.lock() {
+                             *size_guard = 0;
+                         }
+                         me.handle_file_change();
+                     }
                  }
             }
-            Ok(())
+            Ok(0)
+        });
+
+        // --- Gestion du "Forçage" du Curseur (Immédiat) ---
+        let me = self.clone();
+        
+        // Message : Forcer le Sablier
+        self.wnd.on().wm(WM_FORCE_WAIT, move |_| {
+            // On récupère la position actuelle de la souris
+            let pt = winsafe::GetCursorPos().unwrap_or_default();
+            let lst_hwnd = me.lst_logs.hwnd();
+            
+            // On convertit les coordonnées écran vers la ListView
+            if let Ok(client_pt) = lst_hwnd.ScreenToClient(pt) {
+                if let Ok(rc) = lst_hwnd.GetClientRect() {
+                    // CRUCIAL : On vérifie SI la souris est DANS la zone client de la liste
+                    // Si la souris est sur un bouton ou une bordure, on ne force RIEN.
+                    if client_pt.x >= 0 && client_pt.y >= 0 && client_pt.x < rc.right && client_pt.y < rc.bottom {
+                        unsafe {
+                            if let Ok(h_cursor) = LoadCursorW(None, IDC_WAIT) {
+                                WinSetCursor(Some(WinHCURSOR(h_cursor.0)));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(0)
+        });
+
+        // Message : Forcer la Flèche (Normal)
+        self.wnd.on().wm(WM_FORCE_NORMAL, move |_| {
+            unsafe {
+                if let Ok(h_cursor) = LoadCursorW(None, IDC_ARROW) {
+                    WinSetCursor(Some(WinHCURSOR(h_cursor.0)));
+                }
+            }
+            Ok(0)
         });
         
     }
@@ -728,8 +766,19 @@ impl MyWindow {
                         let _ = me.status_bar.parts().get(1).set_text("File changed, reloading...");
                         
                         thread::spawn(move || {
+                            // 1. Lancer le garde-fou busy
                             let busy = BusyGuard::new(me.is_busy.clone());
                             
+                            // 2. FORCER LE CURSEUR IMMÉDIATEMENT
+                            let hwnd_bg_msg = me.wnd.hwnd();
+                            unsafe {
+                                let _ = hwnd_bg_msg.SendMessage(msg::WndMsg {
+                                    msg_id: WM_FORCE_WAIT,
+                                    wparam: 0,
+                                    lparam: 0,
+                                });
+                            }
+
                             // Parser tout le fichier
                             // Parser tout le fichier
                             let hwnd_bg = unsafe { winsafe::HWND::from_ptr(me.wnd.hwnd().ptr()) };
@@ -742,7 +791,16 @@ impl MyWindow {
                                         *r = raw;
                                     }
                                     
-                                    drop(busy); // Drop busy guard
+                                    drop(busy); // Libère le flag is_busy
+
+                                    // 4. FORCER LE RETOUR À LA FLÈCHE
+                                    unsafe {
+                                        let _ = hwnd_bg_msg.SendMessage(msg::WndMsg {
+                                            msg_id: WM_FORCE_NORMAL,
+                                            wparam: 0,
+                                            lparam: 0,
+                                        });
+                                    }
 
                                     // Notifier l'UI que c'est fini
                                     let hwnd = me.wnd.hwnd();
@@ -761,7 +819,15 @@ impl MyWindow {
                                     // En cas d'erreur (ex: fichier verrouillé), on réessaiera plus tard
                                     eprintln!("Reload error: {:?}", e);
                                     
-                                    drop(busy); // Drop busy guard
+                                    drop(busy); // Libère le flag is_busy
+
+                                    unsafe {
+                                        let _ = hwnd_bg_msg.SendMessage(msg::WndMsg {
+                                            msg_id: WM_FORCE_NORMAL,
+                                            wparam: 0,
+                                            lparam: 0,
+                                        });
+                                    }
 
                                     let hwnd = me.wnd.hwnd();
                                     unsafe {
@@ -889,7 +955,19 @@ impl MyWindow {
             let sort_desc_val = *self.sort_desc.read().expect("Lock failed");
 
             thread::spawn(move || {
+                // 1. Lancer le garde-fou busy
                 let busy = BusyGuard::new(is_busy_bg);
+                
+                // 2. FORCER LE CURSEUR IMMÉDIATEMENT
+                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                unsafe {
+                    let _ = hwnd_bg.SendMessage(msg::WndMsg {
+                        msg_id: WM_FORCE_WAIT,
+                        wparam: 0,
+                        lparam: 0,
+                    });
+                }
+
                 let hwnd_progress = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
                 match parse_full_logic(&path, Some(hwnd_progress)) {
                     Ok((items, raw_total)) => {
@@ -903,15 +981,30 @@ impl MyWindow {
                         }
                         apply_filter_logic(&all_items_bg, &filt_ids_bg, &query, show_err_val, sort_col_val, sort_desc_val);
                         
-                        drop(busy); // Drop busy guard
+                        drop(busy); // Libère le flag is_busy
 
-                        let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                        // 4. FORCER LE RETOUR À LA FLÈCHE
+                        unsafe {
+                            let _ = hwnd_bg.SendMessage(msg::WndMsg {
+                                msg_id: WM_FORCE_NORMAL,
+                                wparam: 0,
+                                lparam: 0,
+                            });
+                        }
+
+                        // 5. Notifier l'UI
                         unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
                     }
                     Err(_) => {
-                        drop(busy); // Drop busy guard
-
-                        let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                        // Gestion des erreurs : Même logique
+                        drop(busy);
+                        unsafe {
+                            let _ = hwnd_bg.SendMessage(msg::WndMsg {
+                                msg_id: WM_FORCE_NORMAL,
+                                wparam: 0,
+                                lparam: 0,
+                            });
+                        }
                         unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_ERROR, wparam: 0, lparam: 0 }); }
                     }
                 }
@@ -941,6 +1034,7 @@ impl MyWindow {
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
             let _ = self.status_bar.parts().get(1).set_text(&loader.get("ui-status-loading-folder"));
             
+            let folder_path_str = folder_path.clone();
             let query = self.txt_search.text().unwrap_or_default();
             let show_err_val = *self.show_errors.read().expect("Lock failed");
             let sort_col_val = *self.sort_col.read().expect("Lock failed");
@@ -954,10 +1048,21 @@ impl MyWindow {
             let hwnd_raw = self.wnd.hwnd().ptr() as usize;
 
             thread::spawn(move || {
+                // 1. Lancer le garde-fou busy
                 let busy = BusyGuard::new(is_busy_bg);
                 
+                // 2. FORCER LE CURSEUR IMMÉDIATEMENT
+                let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                unsafe {
+                    let _ = hwnd_bg.SendMessage(msg::WndMsg {
+                        msg_id: WM_FORCE_WAIT,
+                        wparam: 0,
+                        lparam: 0,
+                    });
+                }
+
                 let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
-                if let Ok(entries) = fs::read_dir(&folder_path) {
+                if let Ok(entries) = fs::read_dir(&folder_path_str) {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
@@ -993,14 +1098,30 @@ impl MyWindow {
     
                     apply_filter_logic(&all_items_bg, &filt_ids_bg, &query, show_err_val, sort_col_val, sort_desc_val);
                     
-                    drop(busy); // Drop busy guard
+                    drop(busy); // Libère le flag is_busy
 
-                    let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                    // 4. FORCER LE RETOUR À LA FLÈCHE
+                    unsafe {
+                        let _ = hwnd_bg.SendMessage(msg::WndMsg {
+                            msg_id: WM_FORCE_NORMAL,
+                            wparam: 0,
+                            lparam: 0,
+                        });
+                    }
+
+                    // 5. Notifier l'UI
                     unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
                 } else {
-                     drop(busy); // Drop busy guard
+                     drop(busy); // Libère le flag is_busy
 
-                     let hwnd_bg = unsafe { winsafe::HWND::from_ptr(hwnd_raw as _) };
+                     unsafe {
+                        let _ = hwnd_bg.SendMessage(msg::WndMsg {
+                            msg_id: WM_FORCE_NORMAL,
+                            wparam: 0,
+                            lparam: 0,
+                        });
+                    }
+
                      unsafe { let _ = hwnd_bg.PostMessage(msg::WndMsg { msg_id: WM_LOAD_DONE, wparam: 0, lparam: 0 }); }
                 }
             });
