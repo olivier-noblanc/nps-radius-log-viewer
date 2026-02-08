@@ -258,38 +258,38 @@ impl MyWindow {
                 ..Default::default()
             }),
             txt_search:   gui::Edit::new(&wnd, gui::EditOpts {
-                position: (400, 14), width: 150, height: 22, ..Default::default()
+                position: (510, 14), width: 150, height: 22, ..Default::default()
             }),
             btn_open:     gui::Button::new(&wnd, gui::ButtonOpts {
-                text: &loader.get("ui-open-log"), position: (10, 10), width: 120, height: 30, ..Default::default()
+                text: &loader.get("ui-open-log"), position: (10, 10), width: 110, height: 30, ..Default::default()
             }),
             btn_open_folder: gui::Button::new(&wnd, gui::ButtonOpts {
-                text: &loader.get("ui-folder"), position: (140, 10), width: 120, height: 30, ..Default::default()
+                text: &loader.get("ui-folder"), position: (125, 10), width: 110, height: 30, ..Default::default()
             }),
             btn_rejects:  gui::Button::new(&wnd, gui::ButtonOpts {
-                text: &loader.get("ui-errors"), position: (270, 10), width: 120, height: 30, ..Default::default()
+                text: &loader.get("ui-errors"), position: (240, 10), width: 110, height: 30, ..Default::default()
             }),
             btn_prev_err: gui::Button::new(&wnd, gui::ButtonOpts {
                 text: "< Error",
-                position: (400, 10), // Ajusté
-                width: 80, height: 30,
+                position: (355, 10),
+                width: 70, height: 30,
                 ..Default::default()
             }),
             btn_next_err: gui::Button::new(&wnd, gui::ButtonOpts {
                 text: "Error >",
-                position: (490, 10), // Ajusté
-                width: 80, height: 30,
+                position: (430, 10),
+                width: 70, height: 30,
                 ..Default::default()
             }),
             btn_dark:     gui::Button::new(&wnd, gui::ButtonOpts {
-                text: "Dark Mode", position: (580, 10), width: 100, height: 30, ..Default::default()
+                text: "Dark Mode", position: (670, 10), width: 100, height: 30, ..Default::default()
             }),
             btn_about: gui::Button::new(&wnd, gui::ButtonOpts {
-                text: &loader.get("ui-about"), position: (config.window_width - 130, 10), width: 120, height: 30,
+                text: &loader.get("about_title"), position: (config.window_width - 130, 10), width: 120, height: 30,
                 resize_behavior: (gui::Horz::Repos, gui::Vert::None), ..Default::default()
             }),
             cb_append:    gui::CheckBox::new(&wnd, gui::CheckBoxOpts {
-                text: &loader.get("ui-append"), position: (690, 14), size: (80, 20), ..Default::default()
+                text: &loader.get("ui-append"), position: (780, 14), size: (80, 20), ..Default::default()
             }),
             status_bar:   gui::StatusBar::new(&wnd, &[
                 gui::SbPart::Fixed(200), gui::SbPart::Proportional(1),
@@ -596,8 +596,8 @@ impl MyWindow {
     fn on_btn_about_clicked(&self) -> winsafe::AnyResult<()> {
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         self.wnd.hwnd().MessageBox(
-            &loader.get("ui-about-content"),
-            &loader.get("ui-about-title"),
+            &clean_tr(&loader.get("about_text")),
+            &clean_tr(&loader.get("about_title")),
             co::MB::OK | co::MB::ICONINFORMATION,
         )?;
         Ok(())
