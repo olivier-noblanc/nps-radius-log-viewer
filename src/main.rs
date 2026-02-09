@@ -259,7 +259,8 @@ impl RadiusRequest {
         if query_lower.is_empty() { return true; }
         
         // Use the zero-allocation helper
-        contains_ignore_case(&self.user, query_lower)
+        contains_ignore_case(&self.timestamp, query_lower)
+        || contains_ignore_case(&self.user, query_lower)
         || contains_ignore_case(&self.mac, query_lower)
         || contains_ignore_case(&self.ap_ip, query_lower)
         || contains_ignore_case(&self.ap_name, query_lower)
@@ -1058,6 +1059,9 @@ impl MyWindow {
             
             if !self.cb_append.is_checked() {
                 let _ = self.lst_logs.items().set_count(0, None);
+                self.txt_search.set_text("");
+                *self.show_errors.write().expect("Lock failed") = false;
+                let _ = self.btn_rejects.hwnd().SetWindowText(&loader.get("ui-btn-errors-only"));
             }
             
             let _ = self.status_bar.parts().get(0).set_text(&loader.get("ui-status-loading"));
@@ -1128,6 +1132,10 @@ impl MyWindow {
             
             if !self.cb_append.is_checked() {
                 let _ = self.lst_logs.items().set_count(0, None);
+                self.txt_search.set_text("");
+                *self.show_errors.write().expect("Lock failed") = false;
+                let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
+                let _ = self.btn_rejects.hwnd().SetWindowText(&loader.get("ui-btn-errors-only"));
             }
             
             let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
@@ -1353,13 +1361,37 @@ impl MyWindow {
                 h_menu.AppendMenu(co::MF::STRING, winsafe::IdMenu::Id(1002), winsafe::BmpPtrStr::from_str(&clean_tr(&loader.get("ui-menu-filter-cell"))))?;
 
                 if let Some(cmd_id) = h_menu.TrackPopupMenu(co::TPM::RETURNCMD | co::TPM::LEFTALIGN, pt_screen, self.lst_logs.hwnd())? {
+                    let mut cell_text = String::new();
+                    // TrackPopupMenu with TPM::RETURNCMD returns the ID as i32
+                    if cmd_id == 1001 || cmd_id == 1002 {
+                        let visible = self.visible_cols.read().expect("Lock failed");
+                        if let Some(&log_col) = visible.get(subitem_index as usize) {
+                            let items = self.all_items.read().expect("Lock failed");
+                            let ids = self.filtered_ids.read().expect("Lock failed");
+                            if let Some(&idx) = ids.get(item_index as usize) {
+                                if let Some(req) = items.get(idx) {
+                                    cell_text = match log_col {
+                                        LogColumn::Timestamp => req.timestamp.clone(),
+                                        LogColumn::Type => req.req_type.clone(),
+                                        LogColumn::Server => req.server.clone(),
+                                        LogColumn::ApIp => req.ap_ip.clone(),
+                                        LogColumn::ApName => req.ap_name.clone(),
+                                        LogColumn::Mac => req.mac.clone(),
+                                        LogColumn::User => req.user.clone(),
+                                        LogColumn::ResponseType => req.resp_type.clone(),
+                                        LogColumn::Reason => req.reason.clone(),
+                                        LogColumn::Session => req.session_id.clone(),
+                                    };
+                                }
+                            }
+                        }
+                    }
+
                     match cmd_id {
                         1001 => { 
-                            let cell_text = hit_item.text(subitem_index as _);
                             let _ = clipboard_win::set_clipboard_string(&cell_text); 
                         },
                         1002 => {
-                            let cell_text = hit_item.text(subitem_index as _);
                             let _ = self.txt_search.hwnd().SetWindowText(&cell_text);
                             // Force search refresh
                              let _ = self.wnd.hwnd().SetTimer(IDT_SEARCH_TIMER, 100, None); 
@@ -1845,10 +1877,16 @@ fn get_reason_map() -> &'static HashMap<String, String> {
 
 fn map_reason(code: &str) -> String {
     // Direct search in the HashMap (O(1))
-    get_reason_map()
+    let reason = get_reason_map()
         .get(code)
         .cloned()
-        .unwrap_or_else(|| format!("Code {}", code))
+        .unwrap_or_else(|| format!("Code {}", code));
+    
+    if code != "0" {
+        format!("{} ({})", reason, code)
+    } else {
+        reason
+    }
 }
 
 fn clean_tr(s: &str) -> String {
