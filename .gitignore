@@ -21,3 +21,7 @@ temp*.rs
 *.bak
 *.bak2
 *.bak3
+
+#perso
+.agent/
+.antigravityignore

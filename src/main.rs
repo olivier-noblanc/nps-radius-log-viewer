@@ -353,7 +353,7 @@ impl AboutWindow {
     fn on_wm_events(&self) {
         let me = self.clone();
         self.wnd.on().wm_create(move |_| {
-            let hinst = winsafe::HINSTANCE::GetModuleHandle(None).unwrap();
+            let hinst = winsafe::HINSTANCE::GetModuleHandle(None).expect("GetModuleHandle failed");
             
             // Load icon from resource ID 1 using winsafe high-level API
             let icon_size = winsafe::SIZE::with(128, 128);
@@ -364,14 +364,14 @@ impl AboutWindow {
             ) {
                 // Clone the HICON to use with SetIcon (guard will not destroy due to LR_SHARED)
                 let hicon = clone_hicon(&hicon_guard);
-                let _ = send_message_safe(&me.stc_icon.hwnd(), msg::stm::SetIcon { icon: &hicon });
+                let _ = send_message_safe(me.stc_icon.hwnd(), msg::stm::SetIcon { icon: &hicon });
             }
             Ok(0)
         });
 
         let wnd = self.wnd.clone();
         self.btn_ok.on().bn_clicked(move || {
-            let _ = send_message_safe(&wnd.hwnd(), winsafe::msg::wm::Close {});
+            send_message_safe(wnd.hwnd(), winsafe::msg::wm::Close {});
             Ok(())
         });
     }
@@ -528,12 +528,8 @@ impl MyWindow {
             // 1. Restore window position
             let config = me.config.read().expect("Lock failed");
             if config.window_x != 0 || config.window_y != 0 {
-                let mut pt = winsafe::POINT::default();
-                pt.x = config.window_x;
-                pt.y = config.window_y;
-                let mut sz = winsafe::SIZE::default();
-                sz.cx = config.window_width;
-                sz.cy = config.window_height;
+                let pt = winsafe::POINT { x: config.window_x, y: config.window_y };
+                let sz = winsafe::SIZE { cx: config.window_width, cy: config.window_height };
 
                 me.wnd.hwnd().SetWindowPos(
                     winsafe::HwndPlace::Place(co::HWND_PLACE::NOTOPMOST),
@@ -547,7 +543,7 @@ impl MyWindow {
             let _ = me.lst_logs.hwnd().SetWindowTheme("Explorer", None);
 
             if let Ok(hicon_guard) = winsafe::HINSTANCE::GetModuleHandle(None).and_then(|h| h.LoadIcon(winsafe::IdIdiStr::Id(1))) {
-                let _ = send_message_safe(&me.wnd.hwnd(), msg::wm::SetIcon {
+                let _ = send_message_safe(me.wnd.hwnd(), msg::wm::SetIcon {
                     hicon: clone_hicon(&hicon_guard),
                     size: co::ICON_SZ::BIG
                 });
@@ -644,8 +640,8 @@ impl MyWindow {
 
 
         let me = self.clone();
-        self.wnd.on().wm_timer(IDT_SEARCH_TIMER as usize, move || {
-            me.wnd.hwnd().KillTimer(IDT_SEARCH_TIMER as usize).ok();
+        self.wnd.on().wm_timer(IDT_SEARCH_TIMER, move || {
+            me.wnd.hwnd().KillTimer(IDT_SEARCH_TIMER).ok();
             me.trigger_async_filter();
             Ok(())
         });
@@ -756,7 +752,7 @@ impl MyWindow {
 
         self.wnd.on().wm_context_menu({ let me = self.clone(); move |p| {
             let h_header_opt = me.lst_logs.header().map(|h| h.hwnd());
-            let is_header = h_header_opt.map_or(false, |h| p.hwnd == *h);
+            let is_header = h_header_opt.is_some_and(|h| p.hwnd == *h);
             if p.hwnd == *me.lst_logs.hwnd() || is_header {
                 me.on_lst_context_menu(p.cursor_pos, p.hwnd)?;
             }
@@ -780,34 +776,32 @@ impl MyWindow {
                 let item_idx = p.iItem;
                 let subitem_idx = p.iSubItem as usize;
 
-                if let Ok(real_idx) = me.filtered_ids.read().map(|ids| ids.get(item_idx as usize).copied()) {
-                    if let Some(idx) = real_idx {
-                        if let Ok(items) = me.all_items.read() {
-                            if let Some(req) = items.get(idx) {
-                                let _text = match subitem_idx {
-                                    0 => req.timestamp.clone(),
-                                    1 => req.req_type.clone(),
-                                    2 => req.server.clone(),
-                                    3 => req.ap_ip.clone(),
-                                    4 => req.ap_name.clone(),
-                                    5 => req.mac.clone(),
-                                    6 => req.user.clone(),
-                                    7 => req.resp_type.clone(),
-                                    8 => req.reason.clone(),
-                                    9 => req.session_id.clone(),
-                                    _ => String::new(),
-                                };
-                                // copy info tip text to p.pszText
-                                // p.pszText is LPWSTR (mut pointer to buffer of cchTextMax chars)
-                                // Winsafe NMLVGETINFOTIP likely exposes it.
-                                // If p.pszText() returns Option<String>, it's read-only wrapper?
-                                // Let's try unsafe pointer write if we can get the pointer.
-                                // But struct fields are private.
-                                // If there is no setter, we might be stuck with unsafe transmute or just skipping it for now
-                                // if we can't find the proper way.
-                                // TODO: Fix tooltips properly.
-                                // let _ = p.set_text(&text);
-                            }
+                if let Ok(Some(idx)) = me.filtered_ids.read().map(|ids| ids.get(item_idx as usize).copied()) {
+                    if let Ok(items) = me.all_items.read() {
+                        if let Some(req) = items.get(idx) {
+                            let _text = match subitem_idx {
+                                0 => req.timestamp.clone(),
+                                1 => req.req_type.clone(),
+                                2 => req.server.clone(),
+                                3 => req.ap_ip.clone(),
+                                4 => req.ap_name.clone(),
+                                5 => req.mac.clone(),
+                                6 => req.user.clone(),
+                                7 => req.resp_type.clone(),
+                                8 => req.reason.clone(),
+                                9 => req.session_id.clone(),
+                                _ => String::new(),
+                            };
+                            // copy info tip text to p.pszText
+                            // p.pszText is LPWSTR (mut pointer to buffer of cchTextMax chars)
+                            // Winsafe NMLVGETINFOTIP likely exposes it.
+                            // If p.pszText() returns Option<String>, it's read-only wrapper?
+                            // Let's try unsafe pointer write if we can get the pointer.
+                            // But struct fields are private.
+                            // If there is no setter, we might be stuck with unsafe transmute or just skipping it for now
+                            // if we can't find the proper way.
+                            // TODO: Fix tooltips properly.
+                            // let _ = p.set_text(&text);
                         }
                     }
                 }
@@ -850,13 +844,13 @@ impl MyWindow {
         }
 
         // Get first selected index
-        let start_idx = self.lst_logs.items().iter_selected().next().map(|item| item.index()).unwrap_or(std::u32::MAX);
+        let start_idx = self.lst_logs.items().iter_selected().next().map(|item| item.index()).unwrap_or(u32::MAX);
 
         // start_idx is u32 from GetNextItem (some impls). If it's Option<u32>, unwrap gives u32.
         // If message returns Option<u32>, check signature. Usually Option<u32>.
         // Winsafe returns Option<u32>. u32::MAX is weird if not found. Let's use logic.
 
-        let start_i32 = if start_idx == std::u32::MAX { -1 } else { start_idx as i32 };
+        let start_i32 = if start_idx == u32::MAX { -1 } else { start_idx as i32 };
 
         self.jump_to_error(start_i32, direction);
     }
@@ -1510,7 +1504,7 @@ impl MyWindow {
 
     fn refresh_columns(&self) {
         while self.lst_logs.cols().count().unwrap_or(0) > 0 {
-            send_message_safe(self.lst_logs.hwnd(), msg::lvm::DeleteColumn { index: 0 });
+            let _ = send_message_safe(self.lst_logs.hwnd(), msg::lvm::DeleteColumn { index: 0 });
         }
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         let visible = self.visible_cols.read().expect("Lock failed").clone();
