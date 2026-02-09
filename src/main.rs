@@ -21,18 +21,18 @@ extern "system" {
     fn SetCursor(hcursor: isize) -> isize;
 }
 
-// --- FONCTION SAFE PUBLIQUE ---
+// --- PUBLIC SAFE FUNCTIONS ---
 
-/// Définit le curseur système.
-/// Cette fonction est "Safe" car elle valide les entrées et encapsule l'unsafe.
+/// Sets the system cursor.
+/// This function is "Safe" because it validates inputs and encapsulates unsafe code.
 #[allow(unsafe_code)]
 pub fn set_system_cursor(cursor_id: winsafe::co::IDC) {
-    // 1. Winsafe charge le curseur pour nous. Si ça échoue, on ne fait rien.
-    //    winsafe garantit que si Ok(hcursor), alors le pointeur est valide.
+    // 1. Winsafe loads the cursor for us. If it fails, we do nothing.
+    //    winsafe guarantees that if Ok(hcursor), then the pointer is valid.
     if let Ok(h_cursor) = winsafe::HINSTANCE::NULL.LoadCursor(winsafe::IdIdcStr::Idc(cursor_id)) {
         
-        // 2. On appelle l'API Windows via notre FFI.
-        //    Le bloc unsafe est confiné ici. Vous n'avez plus besoin de l'écrire ailleurs.
+        // 2. We call the Windows API via our FFI.
+        //    The unsafe block is confined here. You no longer need to write it elsewhere.
         unsafe {
             SetCursor(h_cursor.ptr() as isize);
         }
@@ -52,7 +52,7 @@ struct Localizations;
 
 static LANGUAGE_LOADER: OnceLock<FluentLanguageLoader> = OnceLock::new();
 
-// --- FONCTIONS SAFE WRAPPERS ---
+// --- SAFE WRAPPER FUNCTIONS ---
 #[allow(unsafe_code)]
 pub const fn make_wm_safe(v: u32) -> co::WM {
     unsafe { co::WM::from_raw(v) }
@@ -125,7 +125,7 @@ impl SafeHWND {
 }
 const IDT_SEARCH_TIMER: usize = 100; // ID for search timer
 
-// IDs pour le menu Font
+// IDs for the Font menu
 
 
 // --- XML Structures ---
@@ -391,8 +391,8 @@ struct MyWindow {
     btn_open:     gui::Button,
     btn_open_folder: gui::Button,
     btn_rejects:  gui::Button,
-    btn_prev_err: gui::Button, // Navigation erreur
-    btn_next_err: gui::Button, // Navigation erreur
+    btn_prev_err: gui::Button, // Error navigation
+    btn_next_err: gui::Button, // Error navigation
     btn_about:    gui::Button,
     cb_append:    gui::CheckBox,
     status_bar:   gui::StatusBar,
@@ -408,7 +408,7 @@ struct MyWindow {
     config:       Arc<RwLock<AppConfig>>,
     is_busy:      Arc<AtomicBool>,
     
-    // Pour le Tail mode
+    // For Tail mode
     current_file_path: Arc<Mutex<Option<String>>>,
     last_file_size:    Arc<Mutex<u64>>,
     watcher:           Arc<Mutex<Option<notify::RecommendedWatcher>>>,
@@ -650,7 +650,7 @@ impl MyWindow {
             Ok(())
         });
 
-        // --- Gestion de la Progression ---
+        // --- Progress Management ---
         let me = self.clone();
         self.wnd.on().wm(WM_PROGRESS, move |p| {
             let percent = p.wparam as u32;
@@ -671,7 +671,7 @@ impl MyWindow {
                 // Reset status bar
                 let _ = me.status_bar.parts().get(0).set_text("");
             } else {
-                // Mise à jour de la progression
+                // Progress update
                 me.progress_bar.set_position(percent);
             }
             Ok(0)
@@ -815,7 +815,7 @@ impl MyWindow {
             }
         });
 
-        // --- Navigation Erreur ---
+        // --- Error Navigation ---
         self.btn_prev_err.on().bn_clicked({
             let me = self.clone();
             move || { me.navigate_error(-1); Ok(()) }
@@ -831,16 +831,16 @@ impl MyWindow {
         self.lst_logs.on().nm_custom_draw({ let me = self.clone(); move |p| Ok(me.on_lst_nm_custom_draw(p)) });
     }
 
-    // --- Logique de filtrage asynchrone ---
+    // --- Async Filtering Logic ---
     fn on_btn_about_clicked(&self) -> winsafe::AnyResult<()> {
         let about_win = AboutWindow::new();
         about_win.show(&self.wnd)?;
         Ok(())
     }
 
-    // --- Navigation Erreur ---
+    // --- Error Navigation ---
     fn navigate_error(&self, direction: i32) {
-        // 1. Trouver l'index sélectionné actuel
+        // 1. Find the currently selected index
         let selected = self.lst_logs.items().selected_count();
         if selected == 0 {
             let len = self.lst_logs.items().count() as i32;
@@ -899,18 +899,17 @@ impl MyWindow {
             let _ = item.ensure_visible();
 
             self.lst_logs.hwnd().SetFocus();
-            return;
         }
     }
 
     // --- Tail Mode ---
     fn handle_file_change(&self) {
-        let path_opt = self.current_file_path.lock().unwrap().clone();
+        let path_opt = self.current_file_path.lock().expect("Lock poisoned").clone();
         if let Some(path) = path_opt {
             // Update size for next time
             if let Ok(metadata) = std::fs::metadata(&path) {
                 let new_size = metadata.len();
-                let mut last_size = self.last_file_size.lock().unwrap();
+                let mut last_size = self.last_file_size.lock().expect("Lock poisoned");
 
                 if new_size > *last_size {
                     // File grew: reload everything for now (safer for XML)
@@ -932,7 +931,7 @@ impl MyWindow {
                         let is_busy_bg = me.is_busy.clone();
                         let all_items_bg = me.all_items.clone();
                         let raw_count_bg = me.raw_count.clone();
-                        let safe_hwnd = SafeHWND::from_hwnd(&me.wnd.hwnd());
+                        let safe_hwnd = SafeHWND::from_hwnd(me.wnd.hwnd());
                         let path_bg = path.clone();
 
                         thread::spawn(move || {
@@ -985,7 +984,7 @@ impl MyWindow {
 
         let all_items_bg = self.all_items.clone();
         let filt_ids_bg = self.filtered_ids.clone();
-        let safe_hwnd = SafeHWND::from_hwnd(&self.wnd.hwnd());
+        let safe_hwnd = SafeHWND::from_hwnd(self.wnd.hwnd());
 
         // We don't use BusyGuard here to avoid locking the mouse during simple search
         thread::spawn(move || {
@@ -1027,15 +1026,15 @@ impl MyWindow {
 
             // --- WATCHER SETUP ---
             // Deactivate the previous watcher
-            *self.watcher.lock().unwrap() = None;
+            *self.watcher.lock().expect("Lock poisoned") = None;
 
             if !self.cb_append.is_checked() {
-                *self.current_file_path.lock().unwrap() = Some(path.clone());
+                *self.current_file_path.lock().expect("Lock poisoned") = Some(path.clone());
                 if let Ok(meta) = std::fs::metadata(&path) {
-                    *self.last_file_size.lock().unwrap() = meta.len();
+                    *self.last_file_size.lock().expect("Lock poisoned") = meta.len();
                 }
 
-                let safe_hwnd_watcher = SafeHWND::from_hwnd(&self.wnd.hwnd());
+                let safe_hwnd_watcher = SafeHWND::from_hwnd(self.wnd.hwnd());
                 let mut new_watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
                     match res {
                         Ok(event) => {
@@ -1058,9 +1057,9 @@ impl MyWindow {
                         let _ = w.watch(parent, RecursiveMode::NonRecursive);
                     }
                 }
-                *self.watcher.lock().unwrap() = new_watcher;
+                *self.watcher.lock().expect("Lock poisoned") = new_watcher;
             } else {
-                 *self.current_file_path.lock().unwrap() = None;
+                 *self.current_file_path.lock().expect("Lock poisoned") = None;
             }
             
             if !self.cb_append.is_checked() {
@@ -1074,7 +1073,7 @@ impl MyWindow {
             let raw_count_bg = self.raw_count.clone();
             let filt_ids_bg = self.filtered_ids.clone();
             let is_append = self.cb_append.is_checked();
-            let safe_hwnd = SafeHWND::from_hwnd(&self.wnd.hwnd());
+            let safe_hwnd = SafeHWND::from_hwnd(self.wnd.hwnd());
             let query = self.txt_search.text().unwrap_or_default();
             let show_err_val = *self.show_errors.read().expect("Lock failed");
             let sort_col_val = *self.sort_col.read().expect("Lock failed");
@@ -1150,7 +1149,7 @@ impl MyWindow {
             let show_err_val = *self.show_errors.read().expect("Lock failed");
             let sort_col_val = *self.sort_col.read().expect("Lock failed");
             let sort_desc_val = *self.sort_desc.read().expect("Lock failed");
-            let safe_hwnd = SafeHWND::from_hwnd(&self.wnd.hwnd());
+            let safe_hwnd = SafeHWND::from_hwnd(self.wnd.hwnd());
 
             thread::spawn(move || {
                 // 1. Start busy guard
@@ -1253,7 +1252,7 @@ impl MyWindow {
         use std::cell::UnsafeCell;
         thread_local! {
             // Allocate 1KB buffer once per thread
-            static WSTR_BUF: UnsafeCell<winsafe::WString> = UnsafeCell::new(winsafe::WString::from_str(&" ".repeat(512)));
+            static WSTR_BUF: UnsafeCell<winsafe::WString> = UnsafeCell::new(winsafe::WString::from_str(" ".repeat(512)));
         }
         
         WSTR_BUF.with(|cell| {
@@ -1351,7 +1350,7 @@ impl MyWindow {
             
             // Get subitem info manually since winsafe doesn't expose it
             let mut lvhti = winsafe::LVHITTESTINFO { pt: pt_client, ..Default::default() };
-            send_message_safe(&self.lst_logs.hwnd(), msg::lvm::HitTest { info: &mut lvhti });
+            send_message_safe(self.lst_logs.hwnd(), msg::lvm::HitTest { info: &mut lvhti });
             let subitem_index = lvhti.iSubItem;
                 let h_menu = winsafe::HMENU::CreatePopupMenu()?;
                 let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
@@ -1440,15 +1439,15 @@ impl MyWindow {
     #[allow(unsafe_code)]
     fn on_lst_nm_custom_draw(&self, p: &winsafe::NMLVCUSTOMDRAW) -> co::CDRF {
         match p.mcd.dwDrawStage {
-            // Étape 1 : On demande à Windows de dessiner chaque cellule (sous-colonne)
+            // Step 1: Request Windows to draw each cell (sub-column)
             co::CDDS::PREPAINT => co::CDRF::NOTIFYSUBITEMDRAW,
 
-            // Étape 2 : Dessin d'une cellule
+            // Step 2: Cell drawing
             co::CDDS::ITEMPREPAINT => {
                 let item_idx = p.mcd.dwItemSpec as u32;
                 
-                // --- Détection active ---
-                // On vérifie la sélection ET le focus (clavier) via les méthodes winsafe de haut niveau
+                // --- Active detection ---
+                // Verify selection AND focus (keyboard) via high-level winsafe methods
                 let is_selected = self.lst_logs.items().get(item_idx).is_selected();
 
                 let focused_idx = self.lst_logs.items().focused().map(|item| item.index());
@@ -1456,7 +1455,7 @@ impl MyWindow {
 
                 let is_active = is_selected || is_focused;
 
-                // --- Couleur de la ligne ---
+                // --- Row color ---
                 let item_color = {
                     let items = self.all_items.read().expect("Lock failed");
                     let ids = self.filtered_ids.read().expect("Lock failed");
@@ -1464,28 +1463,28 @@ impl MyWindow {
                 };
                 
                 if let Some(clr) = item_color {
-                    // Si la ligne a une couleur personnalisée (Modern Green ou Modern Red)
+                    // If the row has a custom color (Modern Green or Modern Red)
                     
                     let (bg, text_col) = if is_active {
-                        // --- SÉLECTIONNÉ (Variants assombries pour le contraste) ---
-                        // Si le fond est VERT (25, 135, 84)
-                        // Si le fond est ROUGE (220, 53, 69)
+                        // --- SELECTED (Darker variants for contrast) ---
+                        // If the background is GREEN (25, 135, 84)
+                        // If the background is RED (220, 53, 69)
                         let bg_color = if clr.0 == 25 { 
-                             winsafe::COLORREF::from_rgb(20, 108, 67) // Vert Sombre (Bootstrap active)
+                             winsafe::COLORREF::from_rgb(20, 108, 67) // Dark Green (Bootstrap active)
                         } else { 
-                             winsafe::COLORREF::from_rgb(176, 42, 55) // Rouge Sombre (Bootstrap active)
+                             winsafe::COLORREF::from_rgb(176, 42, 55) // Dark Red (Bootstrap active)
                         };
-                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Texte Blanc
+                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // White Text
                     } else {
-                        // --- NORMAL (Couleurs Modernes Vibrantes) ---
+                        // --- NORMAL (Vibrant Modern Colors) ---
                         let bg_color = winsafe::COLORREF::from_rgb(clr.0, clr.1, clr.2);
-                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // Texte Blanc
+                        (bg_color, winsafe::COLORREF::from_rgb(255, 255, 255)) // White Text
                     };
 
-                    // Application des couleurs
+                    // Color application
                     let p_ptr = std::ptr::from_ref(p).cast_mut();
                     unsafe {
-                        // On masque la sélection bleue standard
+                        // Hide the standard blue selection
                         let mut state = (*p_ptr).mcd.uItemState;
                         state &= !co::CDIS::SELECTED; 
                         std::ptr::write_volatile(&mut (*p_ptr).mcd.uItemState, state);
@@ -1494,10 +1493,10 @@ impl MyWindow {
                         std::ptr::write_volatile(&mut (*p_ptr).clrText, text_col);
                     }
                     
-                    // On dit "J'ai changé les couleurs, utilise-les"
+                    // Inform that colors have changed, use them
                     co::CDRF::NEWFONT
                 } else {
-                    // Ligne blanche standard : on laisse Windows gérer (Bleu ou Blanc)
+                    // Standard white row: let Windows handle it (Blue or White)
                     co::CDRF::DODEFAULT
                 }
             },
@@ -1511,7 +1510,7 @@ impl MyWindow {
 
     fn refresh_columns(&self) {
         while self.lst_logs.cols().count().unwrap_or(0) > 0 {
-            let _ = send_message_safe(&self.lst_logs.hwnd(), msg::lvm::DeleteColumn { index: 0 });
+            send_message_safe(self.lst_logs.hwnd(), msg::lvm::DeleteColumn { index: 0 });
         }
         let loader = LANGUAGE_LOADER.get().expect("Loader not initialized");
         let visible = self.visible_cols.read().expect("Lock failed").clone();
@@ -1569,7 +1568,7 @@ impl MyWindow {
 
             // 5. Send message directly to Header
             // This is more robust than LVM_SETCOLUMN for sort flags
-            let _ = send_message_safe(&h_header, msg::hdm::SetItem {
+            send_message_safe(h_header, msg::hdm::SetItem {
                 index: i as u32,
                 hditem: &hdi,
             });
@@ -1727,11 +1726,11 @@ fn parse_full_logic(path: &str, hwnd: Option<SafeHWND>) -> anyhow::Result<(Vec<R
                 let current = count_clone.fetch_add(1, Ordering::Relaxed) + 1;
                 let step = (total_blobs / 100).max(1);
                 
-                if current % step == 0 {
+                if current.is_multiple_of(step) {
                     let pct = 50 + ((current * 50) / total_blobs);
                     let _ = post_message_safe(&h, msg::WndMsg {
                         msg_id: WM_PROGRESS,
-                        wparam: pct as usize,
+                        wparam: pct,
                         lparam: 0,
                     });
                 }

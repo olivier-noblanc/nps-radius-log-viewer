@@ -7,7 +7,7 @@ fn main() -> io::Result<()> {
     // Set icon with explicit ID 1
     res.set_icon_with_id("assets/app.ico", "1");
     
-    // Métadonnées (déjà présentes dans votre code)
+    // Metadata (already present in your code)
     res.set("ProductName", "RADIUS Log Browser");
     res.set("FileDescription", "High-performance viewer for Microsoft NPS/IAS RADIUS logs");
     res.set("ProductVersion", "1.0.0");
