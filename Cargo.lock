@@ -1413,7 +1413,7 @@ dependencies = [
 [[package]]
 name = "winsafe"
 version = "0.0.27"
-source = "git+https://github.com/rodrigocfd/winsafe#560d2d68c81ff35f09c6d43954f783804e8c8deb"
+source = "git+https://github.com/rodrigocfd/winsafe#7870451323a044c2bac4ba7e11a26cedc85a499d"
 
 [[package]]
 name = "zerofrom"
